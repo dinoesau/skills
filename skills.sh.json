@@ -15,7 +15,8 @@
       "description": "Skills para mantener y mejorar la calidad del codigo",
       "skills": [
         "coding-guide",
-        "bloodhound-antipatterns"
+        "bloodhound-antipatterns",
+        "production-system-design"
       ]
     }
   ]
