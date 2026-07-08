@@ -6,6 +6,7 @@
       "title": "Workflow",
       "description": "Skills para el flujo de desarrollo diario",
       "skills": [
+        "to-plan",
         "git-commit",
         "error-handling"
       ]
@@ -15,8 +16,7 @@
       "description": "Skills para mantener y mejorar la calidad del codigo",
       "skills": [
         "coding-guide",
-        "bloodhound-antipatterns",
-        "production-system-design"
+        "bloodhound-antipatterns"
       ]
     }
   ]
