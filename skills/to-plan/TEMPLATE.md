@@ -20,6 +20,9 @@ List file paths, not skill names: some skills set `disable-model-invocation: tru
 
 ## Docs for Humans
 
+<!-- Include Mermaid diagrams for structural/sequential concepts,
+per the Diagrams section in PRD-TEMPLATE.md. -->
+
 ### Problem Statement
 
 ### Solution

@@ -41,7 +41,7 @@ Otherwise go straight to **Synthesize**.
 
 1. Explore the codebase until you can name the files and seams the feature touches.
    Respect any ADRs in the touched area.
-2. Write the **Docs for Humans** section using the template in [PRD-TEMPLATE.md](PRD-TEMPLATE.md), in the project's domain glossary vocabulary.
+2. Write the **Docs for Humans** section using the template in [PRD-TEMPLATE.md](PRD-TEMPLATE.md), in the project's domain glossary vocabulary, with Mermaid diagrams for structural or sequential concepts.
 3. Read [REFERENCE.md](REFERENCE.md) to calibrate evals, guardrails, and checkpoints, then write the **Agent Instructions** section following the skeleton in [TEMPLATE.md](TEMPLATE.md).
 4. Fill the Required skills table by scanning `.agents/skills/` for skills the executing agent needs in the touched area.
 5. Write the result to `docs/plan-<slug>.md`.
@@ -56,5 +56,6 @@ Before declaring the plan done, confirm:
 - [ ] Every file path referenced in the plan exists, or is explicitly marked as new
 - [ ] Required skills are listed as readable file paths, not just skill names
 - [ ] The browser validation section is present only if the change affects UI
+- [ ] Structural or sequential concepts in Docs for Humans are explained with Mermaid diagrams (or the plan has none because the feature is trivial)
 - [ ] Every template placeholder is replaced and every HTML comment deleted
 - [ ] The plan is self-contained: an agent with no access to this conversation can execute it

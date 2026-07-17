@@ -3,6 +3,14 @@
 <!-- Template for the "Docs for Humans" section of a plan.
 This file only defines the sections; process lives in SKILL.md. -->
 
+## Diagrams
+
+Use Mermaid diagrams (fenced `` ```mermaid `` code blocks) for structural or sequential concepts: architecture, data flows, control flow, state machines, entity relationships, sequences, decision trees.
+Lead with the diagram and keep the accompanying text short.
+One concept per diagram.
+Fall back to plain prose when the concept does not map cleanly onto a diagram - a trivial feature may have no diagrams at all.
+Diagrams live in Docs for Humans only; Agent Instructions stays prose and tables.
+
 ## Problem Statement
 
 The problem that the user is facing, from the user's perspective.
@@ -10,6 +18,7 @@ The problem that the user is facing, from the user's perspective.
 ## Solution
 
 The solution to the problem, from the user's perspective.
+If the proposed behavior is a flow or sequence, lead with a Mermaid flowchart or state diagram.
 
 ## User Stories
 
@@ -34,6 +43,13 @@ A list of implementation decisions that were made. This can include:
 - Schema changes
 - API contracts
 - Specific interactions
+
+Express decisions as Mermaid diagrams when they map cleanly:
+
+- Modules and architectural decisions: `graph`
+- Schema changes: `erDiagram`
+- API contracts and specific interactions: `sequenceDiagram`
+- State machines: `stateDiagram-v2`
 
 Do NOT include specific file paths or code snippets. They may end up being outdated very quickly.
 
