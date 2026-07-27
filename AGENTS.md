@@ -25,7 +25,7 @@ This repo is a [skills.sh](https://skills.sh) skill pack. It contains no build s
 
 ## Conventions
 
-- Skill content is in Spanish; file names and frontmatter keys are in English.
+- Skill content, file names, and frontmatter keys are in English.
 - Keep `SKILL.md` focused. Move long catalogs or examples to `REFERENCE.md` / `EXAMPLES.md`.
 - No `package.json`, CI, or generated artifacts to manage.
 

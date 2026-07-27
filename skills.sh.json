@@ -18,6 +18,13 @@
         "coding-guide",
         "bloodhound-antipatterns"
       ]
+    },
+    {
+      "title": "AI",
+      "description": "Skills para construir aplicaciones con modelos de IA",
+      "skills": [
+        "ai-engineering"
+      ]
     }
   ]
 }
