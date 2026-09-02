@@ -43,6 +43,7 @@ A list of implementation decisions that were made. This can include:
 - Schema changes
 - API contracts
 - Specific interactions
+- Dependency and concurrency: if parallel, include a Mermaid DAG of waves and a file-conflict analysis; if sequential, note why parallelism is not applicable
 
 Express decisions as Mermaid diagrams when they map cleanly:
 
