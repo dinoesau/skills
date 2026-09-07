@@ -1,14 +1,16 @@
 ---
 name: rusty
 description: >
-  Diseña dominios Rust con tipos que prueban invariantes en compilación.
-  Usa cuando haya validación repetida con if sobre String o i32, firmas con primitivos,
-  errores String o anyhow en el dominio, o se necesiten newtype con smart constructor,
-  parse-don-t-validate, ADTs y funciones totales, thiserror vs anyhow, type-state,
-  EmailRef zero-cost, proptest, nutype, Axum con functional-core-imperative-shell.
-  No usar para Python o TypeScript, solo Rust.
+  Esta skill debe usarse cuando el usuario pide "modelar el dominio con tipos",
+  "quitar validaciones repetidas" o "errores exhaustivos", o menciona
+  "parse don't validate", "newtype", "smart constructor", "thiserror", "type-state",
+  "proptest" o "functional core imperative shell" en codigo Rust. Convierte validacion
+  runtime repetida en garantias de compilacion con newtypes de campo privado, ADTs,
+  funciones totales y errores estratificados. Solo aplica a Rust.
 license: MIT
 allowed-tools: Bash
+metadata:
+  version: "1.0.0"
 ---
 
 # Rusty - Modelado de dominio funcional en Rust
@@ -93,6 +95,7 @@ Ver [REFERENCE.md](./REFERENCE.md#6-pilar-4-errores-estratificados).
 
 Ejecuta este loop y repite hasta que pase todo.
 Si algo falla, corrige y vuelve a correr desde el paso 1.
+Valida cambios contra [EVALS.md](./EVALS.md): corre los 3 escenarios y exige mejora contra la baseline sin skill.
 
 ```bash
 cargo check
@@ -138,3 +141,4 @@ No sigas links anidados mas alla de estos archivos.
 
 - Patron completo y codigo: [REFERENCE.md](./REFERENCE.md).
 - Pares before/after copiables: [EXAMPLES.md](./EXAMPLES.md).
+- Casos de evaluacion: [EVALS.md](./EVALS.md).
