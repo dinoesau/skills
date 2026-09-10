@@ -10,7 +10,7 @@ description: >
 license: MIT
 allowed-tools: Bash
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # Good-TypeScript - Modelado de dominio funcional en TypeScript
@@ -63,11 +63,12 @@ Ver [REFERENCE.md](./REFERENCE.md#3-pilar-1-branded-types-y-smart-constructors).
 Plantilla estricta (baja libertad, seguir literal):
 
 ```ts
-declare const EmailBrand: unique symbol;
-export type Email = string & { readonly [EmailBrand]: "Email" };
+// domain/brand.ts - canonico, reemplaza el sketch de unique symbol.
+export type Brand<T, Name extends string> = T & { readonly __brand: Name };
+export type Email = Brand<string, "Email">;
 
 export function parseEmail(raw: unknown): Result<Email, EmailError> {
-  // Validar aqui una sola vez.
+  // Parsear aqui una sola vez.
   // Retornar { ok: true, value: trimmed as Email } solo aqui.
 }
 
@@ -104,12 +105,15 @@ npx vitest run
 ```
 
 Busca fugas del patron con estos greps.
-Si alguno imprime lineas en `domain` o `core`, corrige antes de entregar.
+`safeParse` vive solo en parsers de `src/domain`, nunca en `src/core` ni repetido en servicio/repo.
+`throw new Error` vive solo en `assert.ts` via `assertNever`, nunca por input esperado.
+`as Email|Cents|UserId` vive solo en `src/domain`, se revisa como `sudo`.
+Si alguno imprime lineas fuera de esos lugares, corrige antes de entregar.
 
 ```bash
-grep -rn 'safeParse' src/domain src/core || true
+grep -rn 'safeParse' src/core || true
 grep -rn 'as Email\|as Cents\|as UserId' src --include='*.ts' | grep -v 'src/domain/' || true
-grep -rn 'throw new Error' src/domain src/core || true
+grep -rn 'throw new Error' src/domain src/core --exclude='assert.ts' || true
 grep -rn 'isValid' src/domain src/core || true
 ```
 
@@ -123,6 +127,9 @@ Si el workflow tiene dos o mas estados ordenados con distintas operaciones, usa 
 Si es un solo booleano sin orden, no uses type-state.
 Si el hot path solo presta el valor, pasa el brand por referencia sin reparsear.
 Si debes derivar schemas, extiende con `extend` o `pick` en vez de copiar campos.
+Si la forma es valida pero la fila falta en DB, retorna `UserNotFound` 404; si la forma es invalida, retorna `InvalidOrderId` 400.
+Si el ciclo es en memoria usa `StagedOrder`; si es persistencia across restarts usa flag `alreadyRefunded`; usa ambos, no uno u otro.
+Sostiene `as` con ESLint `no-restricted-syntax` sobre `TSAsExpression` con allowlist `domain/*`; exige `strict` + `noUncheckedIndexedAccess` + `declaration:true`.
 
 ## Tabla anti-racionalizacion
 

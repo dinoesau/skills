@@ -15,7 +15,7 @@ Esperado:
 - [ ] Crea `Email`, `UserId` y `Cents` como brands con unico parser que retorna `Result`.
 - [ ] El core acepta solo tipos probados, sin `if` duplicados aguas abajo.
 - [ ] `npx tsc --noEmit`, `npx eslint . --max-warnings 0` y `npx vitest run` pasan.
-- [ ] Ningun grep de fuga imprime lineas en `domain` o `core` (`safeParse`, `as Email` fuera de dominio, `throw` en dominio).
+- [ ] Ningun grep de fuga imprime lineas fuera de lugar (`safeParse` solo en parsers de dominio, `as` solo en dominio, `throw` solo en `assert.ts`).
 
 ## Escenario 2: errores estratificados
 
@@ -34,9 +34,10 @@ Entrada: flags `isSubmitted` e `isPaid` revisados con `if` antes de cada accion.
 
 Esperado:
 
-- [ ] Estados `Order<Draft>` a `Order<Paid>` con llave `StageTag` no exportada.
+- [ ] Estados `StagedOrder<Draft>` a `StagedOrder<Paid>` con llave `StageTag` exportada solo por `declaration:true`.
 - [ ] Pagar un draft o pedir recibo antes de tiempo da error de tipo (`@ts-expect-error` lo documenta).
 - [ ] Sin `safeParse` repetido: el brand viaja probado por referencia.
+- [ ] Adversarial: JSON malformado 400 generico sin filtrar `error.message`, email malo 400, monto negativo 400, `orderId` malformado `InvalidOrderId` 400 vs fila faltante `UserNotFound` 404, doble refund `AlreadyRefunded` 422, exceso de politica `ExceedsMax` 422.
 
 ## Prueba de disparo
 

@@ -531,11 +531,15 @@ pub enum DomainError {
     InvalidEmail(#[from] EmailError),
     #[error("invalid amount: must be positive")]
     InvalidAmount,
+    #[error("amount exceeds policy maximum")]
+    ExceedsMax,
+    #[error("invalid order id")]
+    InvalidOrderId,
     #[error("user not found")]
     UserNotFound,
     #[error("insufficient funds")]
     InsufficientFunds,
-    #[error("refund already processed for order {order_id}")]
+    #[error("refund already processed")]
     AlreadyRefunded { order_id: String },
 }
 ```
@@ -547,9 +551,9 @@ Esa ruptura es la funcionalidad buscada.
 ```rust
 pub fn refund_status_code(err: &DomainError) -> u16 {
     match err {
-        DomainError::InvalidEmail(_) | DomainError::InvalidAmount => 400,
+        DomainError::InvalidEmail(_) | DomainError::InvalidAmount | DomainError::InvalidOrderId => 400,
         DomainError::UserNotFound => 404,
-        DomainError::InsufficientFunds | DomainError::AlreadyRefunded { .. } => 422,
+        DomainError::ExceedsMax | DomainError::InsufficientFunds | DomainError::AlreadyRefunded { .. } => 422,
     }
 }
 ```
@@ -792,11 +796,12 @@ pub fn calculate_refund(
 ) -> Result<Refund, DomainError> {
     // Funcion pura: sin IO, sin async, sin globales.
     // Todos los inputs ya son tipos probados.
+    // Nota: AlreadyRefunded se chequea desde flag persistente antes de llamar, o pasa OrderSnapshot con already_refunded.
     if requested.value() > order.amount.value() {
         return Err(DomainError::InsufficientFunds);
     }
     if requested.value() > policy.max_cents {
-        return Err(DomainError::InvalidAmount);
+        return Err(DomainError::ExceedsMax);
     }
     Ok(Refund {
         order_id: order.id.as_str().to_string(),
@@ -840,8 +845,9 @@ pub async fn refund_handler(
     Json(raw): Json<RefundRequestDto>,
 ) -> Result<impl IntoResponse, AppError> {
     // 1. Parsear en el borde: String e i64 se vuelven Email, UserId, Cents.
+    // Forma invalida es InvalidOrderId 400; forma valida pero fila faltante es UserNotFound 404.
     let email = Email::parse(raw.email).map_err(DomainError::InvalidEmail)?;
-    let user_id = UserId::parse(raw.order_id).map_err(|_| DomainError::UserNotFound)?;
+    let user_id = UserId::parse(raw.order_id).map_err(|_| DomainError::InvalidOrderId)?;
     let amount = Cents::parse(raw.amount_cents).map_err(|_| DomainError::InvalidAmount)?;
 
     // 2. Rehidratar estado minimo y llamar al core puro.
@@ -871,11 +877,11 @@ impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
         let (status, message) = match &self {
             Self::Domain(err) => match err {
-                DomainError::InvalidEmail(_) | DomainError::InvalidAmount => {
+                DomainError::InvalidEmail(_) | DomainError::InvalidAmount | DomainError::InvalidOrderId => {
                     (StatusCode::BAD_REQUEST, err.to_string())
                 }
                 DomainError::UserNotFound => (StatusCode::NOT_FOUND, err.to_string()),
-                DomainError::InsufficientFunds | DomainError::AlreadyRefunded { .. } => {
+                DomainError::ExceedsMax | DomainError::InsufficientFunds | DomainError::AlreadyRefunded { .. } => {
                     (StatusCode::UNPROCESSABLE_ENTITY, err.to_string())
                 }
             },

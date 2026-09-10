@@ -10,7 +10,7 @@ description: >
 license: MIT
 allowed-tools: Bash
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # Rusty - Modelado de dominio funcional en Rust
@@ -66,7 +66,7 @@ pub struct Email(String);
 
 impl Email {
     pub fn parse(raw: String) -> Result<Self, EmailError> {
-        // Validar aqui una sola vez.
+        // Parsear aqui una sola vez.
         // Retornar Ok(Self(valor_normalizado)).
     }
 
@@ -123,6 +123,9 @@ Si el workflow tiene dos o mas estados ordenados con distintas operaciones, usa 
 Si es un solo booleano sin orden, no uses type-state.
 Si el hot path solo presta el valor, usa la vista prestada `EmailRef`.
 Si debes almacenar el valor, promueve a owned una sola vez.
+Si la forma es valida pero la fila falta en DB, retorna `UserNotFound` 404; si la forma es invalida, retorna `InvalidOrderId` 400.
+Si el monto excede politica, retorna `ExceedsMax` 422, no `InvalidAmount` 400.
+El core debe chequear `AlreadyRefunded` desde flag persistente; el type-state cubre moves en memoria; usa ambos.
 
 ## Tabla anti-racionalizacion
 

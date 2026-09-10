@@ -104,9 +104,9 @@ pub fn process(raw: String) -> Result<String, String> {
 // After.
 pub fn classify_failure(err: &DomainError) -> u16 {
     match err {
-        DomainError::InvalidEmail(_) | DomainError::InvalidAmount => 400,
+        DomainError::InvalidEmail(_) | DomainError::InvalidAmount | DomainError::InvalidOrderId => 400,
         DomainError::UserNotFound => 404,
-        DomainError::InsufficientFunds | DomainError::AlreadyRefunded { .. } => 422,
+        DomainError::ExceedsMax | DomainError::InsufficientFunds | DomainError::AlreadyRefunded { .. } => 422,
     }
 }
 ```
@@ -150,6 +150,8 @@ El shell parsea, llama y mapea.
 let refund = calculate_refund(&order, requested, &policy)?;
 
 // Shell: parsea en el borde y retorna DTO.
+// Forma invalida es InvalidOrderId 400; fila faltante es UserNotFound 404.
 let email = Email::parse(raw.email).map_err(DomainError::InvalidEmail)?;
+let user_id = UserId::parse(raw.order_id).map_err(|_| DomainError::InvalidOrderId)?;
 let amount = Cents::parse(raw.amount_cents).map_err(|_| DomainError::InvalidAmount)?;
 ```

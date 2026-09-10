@@ -48,15 +48,15 @@ After: el borde queda explicito en la firma.
 ```ts
 // Before.
 export function refundSharePartial(amount: number, parts: number): number {
-  return amount / parts;
+  return amount / parts; // Infinity con cero, NaN silencioso.
 }
 
-// After.
+// After: vive en domain/money.ts para usar mintCentsUnchecked del mismo modulo.
 export function refundShareTotal(amount: Cents, parts: number): Result<Cents, SplitError> {
   if (!Number.isInteger(parts) || parts <= 0) return { ok: false, error: { kind: "EmptyParts" } };
-  const share = amount / parts;
-  if (!Number.isInteger(share)) return { ok: false, error: { kind: "NotDivisible" } };
-  return { ok: true, value: share as Cents };
+  const share = (amount as number) / parts;
+  if (!Number.isInteger(share)) return { ok: false, error: { kind: "NotDivisible", amount: amount as number, parts } };
+  return { ok: true, value: mintCentsUnchecked(share) };
 }
 ```
 
@@ -66,17 +66,18 @@ Before: niveles anidados por cada parseo.
 After: happy path lineal con riel de error tipado.
 
 ```ts
-// After: version recomendada.
-export function buildOrderClean(rawEmail: unknown, rawAmount: unknown): Result<OrderShape, string> {
+// After: version recomendada con union tipada, sin forja.
+export function buildOrderClean(rawEmail: unknown, rawAmount: unknown, rawUserId: unknown): Result<OrderShape, BuildOrderError> {
   const email = parseEmail(rawEmail);
-  if (!email.ok) return { ok: false, error: `bad email: ${email.error.kind}` };
+  if (!email.ok) return { ok: false, error: { kind: "BadEmail", error: email.error } };
   const amount = parseCents(rawAmount);
-  if (!amount.ok) return { ok: false, error: "bad amount" };
+  if (!amount.ok) return { ok: false, error: { kind: "BadAmount" } };
+  const userId = parseUserId(rawUserId);
+  if (!userId.ok) return { ok: false, error: { kind: "BadUserId" } };
   return {
     ok: true,
     value: {
-      userId: "00000000-0000-4000-8000-000000000000" as OrderShape["userId"],
-      email: email.value, amount: amount.value, method: { kind: "cash" },
+      userId: userId.value, email: email.value, amount: amount.value, method: { kind: "cash" } as const,
     },
   };
 }
@@ -112,9 +113,14 @@ export function payIfSubmitted(order: { isSubmitted: boolean; id: string }): str
   return `paid ${order.id}`;
 }
 
-// After: solo Order<Submitted> entra.
-export function payOrder(order: Order<Submitted>): Order<Paid> {
+// After: solo StagedOrder<Submitted> entra.
+export function payOrder(order: StagedOrder<Submitted>): StagedOrder<Paid> {
   return { id: order.id, amount: order.amount, stage: "paid", [StageTag]: { stage: "paid" } as Paid };
+}
+
+// Politica vs forma: ExceedsMax 422 no es InvalidAmount 400.
+export function classifyPolicy(max: Cents): DomainError {
+  return { kind: "ExceedsMax", max };
 }
 ```
 
