@@ -15,7 +15,8 @@ Esperado:
 - [ ] Crea `Email`, `UserId` y `Cents` como dataclasses `frozen=True, slots=True` con unico `parse` que retorna `Result`.
 - [ ] El core acepta solo tipos probados, sin `if` duplicados aguas abajo.
 - [ ] `mypy --strict .`, `ruff check .` y `pytest` pasan.
-- [ ] Ningun grep de fuga imprime lineas en `domain` o `core` (`model_validate`, `isinstance`, `raise ValueError`, `except Exception`).
+- [ ] Ningun grep de fuga imprime lineas fuera de lugar (`model_validate` nunca en dominio/core, `isinstance` solo en `parse_*` y railway, `raise` solo en validador que se convierte a `Result`).
+- [ ] Adversarial: JSON malformado `"invalid request"` 400 sin `exc.errors()`, email malo 400, monto negativo 400, `orderId` malformado `InvalidOrderId` 400 vs `UserNotFound` 404, doble refund `AlreadyRefunded` 422, exceso `ExceedsMax` 422.
 
 ## Escenario 2: errores estratificados
 

@@ -27,6 +27,7 @@ Esperado:
 - [ ] `AppError` envuelve infra una vez; `anyhow` con `.context()` solo en el edge.
 - [ ] 400, 404 o 422 por variante de dominio; 500 generico para infra.
 - [ ] Agregar una variante rompe el `match` en compilacion.
+- [ ] Adversarial: forma invalida `InvalidOrderId` 400 vs fila faltante `UserNotFound` 404, exceso `ExceedsMax` 422, doble refund `AlreadyRefunded` 422.
 
 ## Escenario 3: type-state en workflow ordenado
 

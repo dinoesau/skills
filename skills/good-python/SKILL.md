@@ -9,7 +9,7 @@ description: >
 license: MIT
 allowed-tools: Bash
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # Good-Python - Modelado de dominio funcional en Python
@@ -68,7 +68,7 @@ class Email:
     _value: str
 
 def parse_email(raw: object) -> Result[Email, EmailError]:
-    # Validar aqui una sola vez.
+    # Parsear aqui una sola vez.
     # Retornar Ok(Email(_value=trimmed)) solo aqui.
 ```
 
@@ -77,7 +77,8 @@ def parse_email(raw: object) -> Result[Email, EmailError]:
 Modela alternativas con uniones de dataclasses frozen y combinaciones con dataclasses producto.
 Haz cada funcion parcial una funcion total que retorna `Result`.
 Compon con `and_then`, `map_result`, `map_err` o retorno temprano en vez de piramides de `if`.
-Nunca uses `assert` para invariantes: desaparece con `python -O`.
+Nunca uses `assert` para invariantes de dominio: desaparece con `python -O`.
+`assert isinstance(x, Ok)` solo se tolera como narrowing en shell tras `parse`, nunca como invariante de dominio.
 Ver [REFERENCE.md](./REFERENCE.md#4-pilar-2-adts-y-funciones-totales).
 
 ### 4. Estratificar errores por audiencia
@@ -102,11 +103,13 @@ pytest
 ```
 
 Busca fugas del patron con estos greps.
-Si alguno imprime lineas en `domain` o `core`, corrige antes de entregar.
+`isinstance` esta permitido solo en `parse_*` del borde y en chequeos railway `isinstance(x, Err|Ok)`; prohibido para rechequear reglas de dominio en `core`.
+`raise ValueError` esta permitido solo dentro de `branded_str_validator` que se convierte a `Result` en `parse`; prohibido como error de dominio.
+Si alguno imprime lineas fuera de esos lugares, corrige antes de entregar.
 
 ```bash
 grep -rn 'model_validate' src/domain src/core || true
-grep -rn 'isinstance' src/domain src/core || true
+grep -rn 'isinstance.*dict\|isinstance.*Any' src/core || true
 grep -rn 'raise ValueError' src/domain src/core || true
 grep -rn 'except Exception' src/domain src/core || true
 ```
@@ -121,6 +124,9 @@ Si el workflow tiene dos o mas estados ordenados con distintas operaciones, usa 
 Si es un solo booleano sin orden, no uses type-state.
 Si el hot path ya tiene el valor probado, pasa el value object sin revalidar.
 Si debes mecanizar reglas repetidas, usa decorador que deje la regla visible en el modulo de dominio.
+Si la forma es valida pero la fila falta en DB, retorna `UserNotFound` 404; si la forma es invalida, retorna `InvalidOrderId` 400.
+Pydantic vive solo en DTOs shape-only del shell; el dominio nunca importa `BaseModel`; nunca retornes `exc.errors()` al cliente, usa `"invalid request"` generico.
+`DbError`/`GatewayError` guardan `cause: Exception`, no `str`, para preservar traceback y retry.
 
 ## Tabla anti-racionalizacion
 

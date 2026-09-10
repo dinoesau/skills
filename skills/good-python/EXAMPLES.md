@@ -68,12 +68,12 @@ def refund_share_partial(amount: int, parts: int) -> int:
 
 # After.
 def refund_share_total(amount: Cents, parts: int) -> Result[Cents, SplitError]:
-    if parts <= 0:
+    if isinstance(parts, bool) or not isinstance(parts, int) or parts <= 0:
         return Err(EmptyParts())
     raw = amount.to_int()
     if raw % parts != 0:
         return Err(NotDivisible(amount=raw, parts=parts))
-    return Ok(Cents(_value=raw // parts))
+    return Ok(Cents._mint_after_check(raw // parts))
 ```
 
 ## 5. Piramide de `if` vs railway con retorno temprano
@@ -82,17 +82,18 @@ Before: niveles anidados por cada parseo.
 After: happy path lineal con riel de error tipado.
 
 ```python
-# After: version recomendada.
-def build_order_clean(raw_email: object, raw_amount: object) -> Result[OrderShape, str]:
+# After: version recomendada con union tipada, sin forja ni f-strings.
+def build_order_clean(raw_email: object, raw_amount: object, raw_user_id: object) -> Result[OrderShape, DomainError]:
     email = parse_email(raw_email)
     if isinstance(email, Err):
-        return Err(f"bad email: {email.error!r}")
+        return Err(InvalidEmail(detail=email.error))
     amount = Cents.parse(raw_amount)
     if isinstance(amount, Err):
-        return Err(f"bad amount: {amount.error}")
-    user = UserId.parse("00000000-0000-4000-8000-000000000000")
+        return Err(InvalidAmount(detail="invalid amount"))
+    user = UserId.parse(raw_user_id)
     if isinstance(user, Err):
         return Err(user.error)
+    assert isinstance(email, Ok) and isinstance(amount, Ok) and isinstance(user, Ok)
     return Ok(OrderShape(user_id=user.value, email=email.value, amount=amount.value, method=Cash()))
 ```
 

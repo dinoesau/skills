@@ -76,9 +76,9 @@ export function notify(rawEmail: string): void {
 Parsear transforma y certifica en un solo movimiento.
 
 ```ts
-declare const EmailBrand: unique symbol;
-export type Email = string & { readonly [EmailBrand]: "Email" };
+export type Email = Brand<string, "Email">;
 export type EmailError =
+  | { readonly kind: "NotAString" }
   | { readonly kind: "MissingAt" }
   | { readonly kind: "EmptyLocalPart" }
   | { readonly kind: "InvalidDomain" };
@@ -87,13 +87,19 @@ export type Result<T, E> =
   | { readonly ok: false; readonly error: E };
 
 export function parseEmail(raw: unknown): Result<Email, EmailError> {
-  if (typeof raw !== "string") return { ok: false, error: { kind: "MissingAt" } };
+  if (typeof raw !== "string") return { ok: false, error: { kind: "NotAString" } };
+  if (raw.length > 254) return { ok: false, error: { kind: "InvalidDomain" } };
   const trimmed = raw.trim();
+  if (trimmed.split("@").length !== 2) return { ok: false, error: { kind: "MissingAt" } };
+  if (/\s/.test(trimmed)) return { ok: false, error: { kind: "InvalidDomain" } };
   const at = trimmed.indexOf("@");
-  if (at < 0) return { ok: false, error: { kind: "MissingAt" } };
   if (trimmed.slice(0, at) === "") return { ok: false, error: { kind: "EmptyLocalPart" } };
-  if (!trimmed.slice(at + 1).includes(".")) return { ok: false, error: { kind: "InvalidDomain" } };
+  const domain = trimmed.slice(at + 1);
+  if (!domain.includes(".") || domain.includes("..") || domain.startsWith(".") || domain.endsWith(".")) {
+    return { ok: false, error: { kind: "InvalidDomain" } };
+  }
   // Unico cast sancionado del codebase. Vive aqui, se revisa una vez, se testea con fast-check.
+  // Nota: este helper `Brand` reemplaza el sketch introductorio de `unique symbol`. Usa `domain/brand.ts` como canonico.
   return { ok: true, value: trimmed as Email };
 }
 
@@ -138,26 +144,37 @@ export function emailToString(email: Email): string { return email; }
 
 ```ts
 // domain/money.ts: mismo patron para numericos.
-export type MoneyError = { readonly kind: "NonPositive"; readonly received: number };
+export type MoneyError =
+  | { readonly kind: "NotANumber"; readonly received: unknown }
+  | { readonly kind: "NotAnInteger"; readonly received: unknown }
+  | { readonly kind: "NonPositive"; readonly received: unknown };
 export function parseCents(raw: unknown): Result<Cents, MoneyError> {
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return { ok: false, error: { kind: "NonPositive", received: NaN } };
+    return { ok: false, error: { kind: "NotANumber", received: raw } };
   }
-  if (!Number.isInteger(raw) || raw <= 0) {
+  if (!Number.isInteger(raw)) {
+    return { ok: false, error: { kind: "NotAnInteger", received: raw } };
+  }
+  if (raw <= 0) {
     return { ok: false, error: { kind: "NonPositive", received: raw } };
   }
   return { ok: true, value: raw as Cents };
 }
 export function centsToNumber(amount: Cents): number { return amount; }
-```
+
+// Solo `mintCentsUnchecked` dentro de `domain/money.ts` puede forjar sin revalidar.
+// Vive en el mismo modulo que `refundShareTotal`. Fixtures usan `parseCents`, nunca el mint privado.
+function mintCentsUnchecked(value: number): Cents {
+  return value as Cents;
+}
 
 Para agregados con forma de clase, usa llave de tag no exportada para que nadie forje el literal fuera del modulo.
 
 ```ts
 // domain/order.ts
-const OrderTag: unique symbol = Symbol("OrderTag");
+declare const OrderTag: unique symbol;
 export interface Order {
-  readonly id: string;
+  readonly id: OrderId;
   readonly userId: UserId;
   readonly email: Email;
   readonly amount: Cents;
@@ -165,7 +182,7 @@ export interface Order {
   readonly [OrderTag]: "Order";
 }
 export function createOrder(input: {
-  readonly id: string; readonly userId: UserId; readonly email: Email;
+  readonly id: OrderId; readonly userId: UserId; readonly email: Email;
   readonly amount: Cents; readonly method: PaymentMethod;
 }): Order {
   // Inputs ya probados, sin validacion aqui.
@@ -177,23 +194,47 @@ Zod y Effect Schema encajan como implementacion del parser dentro del smart cons
 
 ```ts
 // domain/refund-request.ts: schema como parser, brand como prueba.
+// Zod solo valida forma con caps para acotar regex/trim. La semantica vive en parseUserId/parseEmail/parseCents.
 const RefundSchema = z.object({
-  userId: z.string().uuid(),
-  email: z.string(),
+  userId: z.string().max(64),
+  email: z.string().max(254),
   amount: z.number(),
 });
+export type RefundRequestError =
+  | { readonly kind: "BadShape"; readonly issues: string }
+  | { readonly kind: "BadEmail"; readonly error: EmailError }
+  | { readonly kind: "BadUserId" }
+  | { readonly kind: "BadAmount" };
 export function parseRefundRequest(data: unknown): Result<RefundRequest, RefundRequestError> {
   const shaped = RefundSchema.safeParse(data);
-  if (!shaped.success) return { ok: false, error: { kind: "BadShape", issues: shaped.error.message } };
+  if (!shaped.success) return { ok: false, error: { kind: "BadShape", issues: shaped.error.issues.length.toString() } };
   const email = parseEmail(shaped.data.email);
   if (!email.ok) return { ok: false, error: { kind: "BadEmail", error: email.error } };
+  const userId = parseUserId(shaped.data.userId);
+  if (!userId.ok) return { ok: false, error: { kind: "BadUserId" } };
   const amount = parseCents(shaped.data.amount);
   if (!amount.ok) return { ok: false, error: { kind: "BadAmount" } };
-  return { ok: true, value: { userId: shaped.data.userId as UserId, email: email.value, amount: amount.value } };
+  return { ok: true, value: { userId: userId.value, email: email.value, amount: amount.value } };
+}
+
+// domain/user.ts: unico dueno de la regla UUID.
+const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function parseUserId(raw: unknown): Result<UserId, { readonly kind: "InvalidUserId" }> {
+  if (typeof raw !== "string") return { ok: false, error: { kind: "InvalidUserId" } };
+  if (raw.length > 64) return { ok: false, error: { kind: "InvalidUserId" } };
+  const trimmed = raw.trim();
+  if (!uuidRe.test(trimmed)) return { ok: false, error: { kind: "InvalidUserId" } };
+  return { ok: true, value: trimmed as UserId };
+}
+export function parseOrderId(raw: unknown): Result<OrderId, { readonly kind: "InvalidOrderId" }> {
+  if (typeof raw !== "string" || raw.trim() === "" || raw.length > 64) {
+    return { ok: false, error: { kind: "InvalidOrderId" } };
+  }
+  return { ok: true, value: raw.trim() as OrderId };
 }
 ```
 
-Limite honesto: en Rust el campo privado es inforjable fisicamente. En TypeScript el brand se borra en runtime y cualquier modulo puede escribir `raw as Email`. La inforjabilidad es disciplinaria. Sostenla con tres reglas: el `as` vive solo en el smart constructor, prohibe `as` fuera con `@typescript-eslint/consistent-type-assertions`, y re-exporta el tipo opaco sin la llave del brand. Revisa cada `as` nuevo como un `sudo`.
+Limite honesto: en Rust el campo privado es inforjable fisicamente. En TypeScript el brand se borra en runtime y cualquier modulo puede escribir `raw as Email`, incluso `{} as StagedOrder<Paid>`. La inforjabilidad es disciplinaria. Sostenla con tres reglas: el `as` vive solo en el smart constructor, prohibe `as` fuera con ESLint `no-restricted-syntax` sobre `TSAsExpression` con allowlist `domain/*`, y re-exporta el tipo opaco sin la llave del brand. Revisa cada `as` nuevo como un `sudo`.
 
 ## 4. Pilar 2: ADTs y funciones totales
 
@@ -250,21 +291,33 @@ export function refundSharePartial(amount: number, parts: number): number {
 }
 
 // Total: cada input mapea a un resultado explicito.
-export type SplitError = { readonly kind: "EmptyParts" } | { readonly kind: "NotDivisible" };
+// Vive en `domain/money.ts` para usar `mintCentsUnchecked` del mismo modulo.
+export type SplitError =
+  | { readonly kind: "EmptyParts" }
+  | { readonly kind: "NotDivisible"; readonly amount: number; readonly parts: number };
 export function refundShareTotal(amount: Cents, parts: number): Result<Cents, SplitError> {
   if (!Number.isInteger(parts) || parts <= 0) return { ok: false, error: { kind: "EmptyParts" } };
-  const share = amount / parts;
-  if (!Number.isInteger(share)) return { ok: false, error: { kind: "NotDivisible" } };
-  return { ok: true, value: share as Cents };
+  const share = (amount as number) / parts;
+  if (!Number.isInteger(share)) return { ok: false, error: { kind: "NotDivisible", amount: amount as number, parts } };
+  return { ok: true, value: mintCentsUnchecked(share) };
 }
 ```
 
-Disciplina `strict` mas `noUncheckedIndexedAccess`: indexar, dividir y leer JSON son parciales, asi que cada uno retorna `Result` o estrecha antes de usarse.
+Disciplina `strict` mas `noUncheckedIndexedAccess`: indexar retorna `T | undefined` por compilador y debe estrecharse antes de usarse. Division y lectura de JSON `any` no las fuerza el compilador: retorna `Result` por disciplina, no porque el compilador lo exija.
 
 Composicion con `map`, `andThen` y `mapErr` en vez de piramides. Esto es Railway Oriented Programming de Scott Wlaschin.
 
 ```ts
 // domain/result.ts
+export type Result<T, E> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly error: E };
+export function ok<T>(value: T): Result<T, never> {
+  return { ok: true, value };
+}
+export function err<E>(error: E): Result<never, E> {
+  return { ok: false, error };
+}
 export function map<T, U, E>(result: Result<T, E>, fn: (value: T) => U): Result<U, E> {
   return result.ok ? { ok: true, value: fn(result.value) } : result;
 }
@@ -281,19 +334,27 @@ export function mapErr<T, E, F>(result: Result<T, E>, fn: (error: E) => F): Resu
 Para cadenas largas, el retorno temprano manual es el `?` de TypeScript con la misma semantica monadica.
 
 ```ts
-export function buildOrderClean(rawEmail: unknown, rawAmount: unknown): Result<OrderShape, string> {
+export type BuildOrderError =
+  | { readonly kind: "BadEmail"; readonly error: EmailError }
+  | { readonly kind: "BadAmount" }
+  | { readonly kind: "BadUserId" };
+export function buildOrderClean(rawEmail: unknown, rawAmount: unknown, rawUserId: unknown): Result<OrderShape, BuildOrderError> {
   const email = parseEmail(rawEmail);
-  if (!email.ok) return { ok: false, error: `bad email: ${email.error.kind}` };
+  if (!email.ok) return { ok: false, error: { kind: "BadEmail", error: email.error } };
   const amount = parseCents(rawAmount);
-  if (!amount.ok) return { ok: false, error: "bad amount" };
+  if (!amount.ok) return { ok: false, error: { kind: "BadAmount" } };
+  const userId = parseUserId(rawUserId);
+  if (!userId.ok) return { ok: false, error: { kind: "BadUserId" } };
   return {
     ok: true,
     value: {
-      userId: "00000000-0000-4000-8000-000000000000" as OrderShape["userId"],
-      email: email.value, amount: amount.value, method: { kind: "cash" },
+      userId: userId.value, email: email.value, amount: amount.value, method: { kind: "cash" } as const,
     },
   };
 }
+
+// Version con combinadores preserva la union automaticamente via `E | F`.
+// Retorno temprano exige mapeo manual a `BuildOrderError`. Ambas conservan los dos rieles.
 ```
 
 ## 5. Pilar 3: Lisp, expresiones y metaprogramacion
@@ -373,9 +434,11 @@ Estratifica en tres capas: core expone dominio, app envuelve infra una vez, edge
 export type DomainError =
   | { readonly kind: "InvalidEmail"; readonly error: EmailError }
   | { readonly kind: "InvalidAmount" }
-  | { readonly kind: "UserNotFound"; readonly userId: string }
-  | { readonly kind: "InsufficientFunds"; readonly requested: number; readonly balance: number }
-  | { readonly kind: "AlreadyRefunded"; readonly orderId: string };
+  | { readonly kind: "ExceedsMax"; readonly max: Cents }
+  | { readonly kind: "InvalidOrderId" }
+  | { readonly kind: "UserNotFound"; readonly userId: UserId }
+  | { readonly kind: "InsufficientFunds"; readonly requested: Cents; readonly balance: Cents }
+  | { readonly kind: "AlreadyRefunded"; readonly orderId: OrderId };
 ```
 
 El `switch` exhaustivo fuerza decisiones de producto.
@@ -384,8 +447,10 @@ El `switch` exhaustivo fuerza decisiones de producto.
 export function domainToStatus(error: DomainError): number {
   switch (error.kind) {
     case "InvalidEmail":
-    case "InvalidAmount": return 400;
+    case "InvalidAmount":
+    case "InvalidOrderId": return 400;
     case "UserNotFound": return 404;
+    case "ExceedsMax":
     case "InsufficientFunds":
     case "AlreadyRefunded": return 422;
     default: return assertNever(error);
@@ -395,9 +460,11 @@ export function domainToMessage(error: DomainError): string {
   switch (error.kind) {
     case "InvalidEmail": return `invalid email: ${error.error.kind}`;
     case "InvalidAmount": return "invalid amount: must be a positive integer";
+    case "InvalidOrderId": return "invalid order id";
+    case "ExceedsMax": return "amount exceeds policy maximum";
     case "UserNotFound": return "user not found";
     case "InsufficientFunds": return "insufficient funds";
-    case "AlreadyRefunded": return `refund already processed for order ${error.orderId}`;
+    case "AlreadyRefunded": return "refund already processed";
     default: return assertNever(error);
   }
 }
@@ -411,6 +478,12 @@ export type AppError =
   | { readonly kind: "Domain"; readonly error: DomainError }
   | { readonly kind: "Database"; readonly cause: unknown }
   | { readonly kind: "Gateway"; readonly cause: unknown };
+
+export function appToStatus(error: AppError): number {
+  if (error.kind === "Domain") return domainToStatus(error.error);
+  return 500;
+}
+// La app importa el status desde el dominio, nunca desde el shell. Una sola tabla, sin duplicar.
 ```
 
 Agrega contexto y logs solo en el edge, donde humanos leen.
@@ -435,27 +508,28 @@ Algunos invariantes no son sobre valores solos sino sobre secuencias. Una orden 
 
 ```ts
 // domain/order-lifecycle.ts
+// Lifecycle usa StagedOrder, nunca el Order del core, para no colisionar.
 export interface Draft { readonly stage: "draft"; }
 export interface Submitted { readonly stage: "submitted"; }
 export interface Paid { readonly stage: "paid"; }
 export type OrderStage = Draft | Submitted | Paid;
-declare const StageTag: unique symbol;
-export interface Order<S extends OrderStage> {
-  readonly id: string;
+export const StageTag: unique symbol = Symbol("StageTag");
+export interface StagedOrder<S extends OrderStage> {
+  readonly id: OrderId;
   readonly amount: Cents;
   readonly stage: S["stage"];
   readonly [StageTag]: S;
 }
-export function createDraftOrder(id: string, amount: Cents): Order<Draft> {
+export function createDraftOrder(id: OrderId, amount: Cents): StagedOrder<Draft> {
   return { id, amount, stage: "draft", [StageTag]: { stage: "draft" } as Draft };
 }
-export function submitOrder(order: Order<Draft>): Order<Submitted> {
+export function submitOrder(order: StagedOrder<Draft>): StagedOrder<Submitted> {
   return { id: order.id, amount: order.amount, stage: "submitted", [StageTag]: { stage: "submitted" } as Submitted };
 }
-export function payOrder(order: Order<Submitted>): Order<Paid> {
+export function payOrder(order: StagedOrder<Submitted>): StagedOrder<Paid> {
   return { id: order.id, amount: order.amount, stage: "paid", [StageTag]: { stage: "paid" } as Paid };
 }
-export function receiptFor(order: Order<Paid>): string {
+export function receiptFor(order: StagedOrder<Paid>): string {
   return `paid ${order.amount} for ${order.id}`;
 }
 ```
@@ -463,24 +537,24 @@ export function receiptFor(order: Order<Paid>): string {
 Uso correcto fluye por el compilador. Transiciones ilegales no compilan.
 
 ```ts
-const draft = createDraftOrder("ord_1", 5000 as Cents);
+const draft = createDraftOrder(parseOrderId("ord_1").value as OrderId, mintCentsUnchecked(5000));
 const submitted = submitOrder(draft);
 const paid = payOrder(submitted);
-// @ts-expect-error: payOrder necesita Order<Submitted>.
+// @ts-expect-error: payOrder necesita StagedOrder<Submitted>.
 const illegal = payOrder(draft);
-// @ts-expect-error: receipt necesita Order<Paid>.
+// @ts-expect-error: receipt necesita StagedOrder<Paid>.
 const early = receiptFor(submitted);
 ```
 
-TypeScript no destruye el binding viejo `draft` como Rust con move. Sosten el patron con disciplina: prefiere sombrear (`const order = submitOrder(order)`), mantene la llave `StageTag` sin exportar para que nadie forje `Order<Paid>` a mano, y revisa reuso post-transicion en modulos pequenos. Honestidad: el compilador prueba el valor nuevo, solo el review prueba que el binding viejo se descarto.
+TypeScript no destruye el binding viejo `draft` como Rust con move. Sosten el patron con disciplina: prefiere rebind con `let order; order = submitOrder(order)` o nuevos nombres (`const submitted = submitOrder(order)`), nunca `const order = submitOrder(order)` que reasigna const. Mantene la llave `StageTag` exportada solo por `declaration:true`; la forja sigue necesitando `as`, la opacidad es disciplinaria. Revisa reuso post-transicion en modulos pequenos. Honestidad: el compilador prueba el valor nuevo, solo el review prueba que el binding viejo se descarto.
 
-Usa type-state cuando la secuencia importa y el costo de transicion mala es alto: pagos, provisioning, publicacion, onboarding multi-paso. Heuristica: dos o mas estados ordenados con distintas operaciones. No lo uses para cada booleano o el ruido generico ahoga el dominio.
+Usa type-state cuando la secuencia importa y el costo de transicion mala es alto: pagos, provisioning, publicacion, onboarding multi-paso. Heuristica: dos o mas estados ordenados con distintas operaciones. No lo uses para cada booleano o el ruido generico ahoga el dominio. Un solo `isArchived` con una rama es runtime check, no lifecycle. `alreadyRefunded: boolean` en `OrderSnapshot` es persistencia across restarts. `StagedOrder` es transicion en memoria. Usa ambos: type-state para moves, flag para storage.
 
 ## 8. Ingenieria avanzada: brands zero-runtime y fast-check
 
-Los brands son abstraccion genuinamente zero-cost: `type Email = string & { __brand: "Email" }` no emite JavaScript. Sin wrapper, sin alocacion, sin indireccion en el hot path. La prueba vive en el checker y desaparece del bundle.
+Los brands son abstraccion genuinamente zero-cost solo como primitivos: `type Email = string & { __brand: "Email" }` no emite JavaScript. Sin wrapper, sin alocacion en el hot path. Ojo: `Order` y `StagedOrder` con `Symbol()` + spread si alocan un objeto por transicion. Manten el lifecycle fuera del hot path.
 
-Regla de performance: parsea una vez en el edge, luego pasa el brand por referencia. Nunca llames `safeParse` de nuevo en servicio y repo para un valor ya brandeado.
+Regla de performance: parsea una vez en el edge, luego pasa el brand por referencia. Nunca llames `safeParse` de nuevo en servicio y repo para un valor ya brandeado. Mide antes de optimizar: el costo dominante suele ser IO, no el parse.
 
 ```ts
 // Mal: re-parsear un valor probado en el hot path.
@@ -505,6 +579,7 @@ La logica de parsing merece tests mas fuertes que ejemplos a mano. `fast-check` 
 ```ts
 // domain/email.properties.test.ts
 import * as fc from "fast-check";
+const opts = { seed: 42, numRuns: 1000 };
 test("valid shaped emails always parse", () => {
   fc.assert(fc.property(
     fc.tuple(
@@ -513,16 +588,36 @@ test("valid shaped emails always parse", () => {
       fc.stringOf(fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz"), { minLength: 2, maxLength: 4 }),
     ),
     ([local, domain, tld]) => { expect(parseEmail(`${local}@${domain}.${tld}`).ok).toBe(true); },
-  ));
+  ), opts);
+});
+test("missing @ never parses", () => {
+  fc.assert(fc.property(
+    fc.string().filter((s) => !s.includes("@")),
+    (raw) => { expect(parseEmail(raw).ok).toBe(false); },
+  ), opts);
+});
+test("double @ never parses", () => {
+  fc.assert(fc.property(
+    fc.tuple(fc.string(), fc.string(), fc.string()),
+    ([a, b, c]) => { expect(parseEmail(`${a}@${b}@${c}`).ok).toBe(false); },
+  ), opts);
 });
 test("parse never throws on arbitrary unicode", () => {
   fc.assert(fc.property(fc.fullUnicodeString(), (raw) => {
     expect(() => parseEmail(raw)).not.toThrow();
-  }));
+  }), opts);
+});
+test("parsed value is trimmed input", () => {
+  fc.assert(fc.property(fc.constant(" s@example.com "), (raw) => {
+    const r = parseEmail(raw);
+    expect(r.ok && r.value === raw.trim()).toBe(true);
+  }), opts);
 });
 ```
 
-Corre con `vitest run` y guarda el seed que falla como test de regresion. Ganas robustez matematica: formas validas siempre pasan, invalidas siempre fallan, Unicode hostil nunca lanza, y la normalizacion hace round-trip.
+Corre con `vitest run` y pina `seed: 42, numRuns: 1000` en CI para determinismo. Guarda el seed que falla como test de regresion tras shrinking. Ganas robustez matematica: formas validas siempre pasan, invalidas siempre fallan, Unicode hostil nunca lanza, y la normalizacion hace round-trip.
+
+Requiere `tsconfig.json` con `strict`, `noUncheckedIndexedAccess` y `declaration:true` (exigido por `export const StageTag`). Pins: `hono ^4`, `zod ^3` (nota: Zod 4 usa `z.email()`/`z.uuid()` y param `error`; si migras, cambia `z.string().email()` y `shaped.error.message` por `issues`), `ts-pattern ^5`, `fast-check ^3`, `vitest ^2`, `typescript ^5`.
 
 ## 9. Arquitectura: functional core, imperative shell
 
@@ -533,20 +628,20 @@ Define el core puro primero.
 
 ```ts
 // core/refunds.ts: puro, sync, sin IO.
-export interface RefundPolicy { readonly maxCents: number; }
-export interface Refund { readonly orderId: string; readonly amount: Cents; }
-export interface OrderSnapshot { readonly orderId: string; readonly balance: number; readonly alreadyRefunded: boolean; }
+export interface RefundPolicy { readonly maxCents: Cents; }
+export interface Refund { readonly orderId: OrderId; readonly amount: Cents; }
+export interface OrderSnapshot { readonly orderId: OrderId; readonly balance: Cents; readonly alreadyRefunded: boolean; }
 export function calculateRefund(
   order: OrderSnapshot, requested: Cents, policy: RefundPolicy,
 ): Result<Refund, DomainError> {
   if (order.alreadyRefunded) {
     return { ok: false, error: { kind: "AlreadyRefunded", orderId: order.orderId } };
   }
-  if (requested > order.balance) {
+  if ((requested as number) > (order.balance as number)) {
     return { ok: false, error: { kind: "InsufficientFunds", requested, balance: order.balance } };
   }
-  if (requested > policy.maxCents) {
-    return { ok: false, error: { kind: "InvalidAmount" } };
+  if ((requested as number) > (policy.maxCents as number)) {
+    return { ok: false, error: { kind: "ExceedsMax", max: policy.maxCents } };
   }
   return { ok: true, value: { orderId: order.orderId, amount: requested } };
 }
@@ -571,10 +666,15 @@ app.post("/refund", async (c) => {
   // 1. Parsear en el borde: unknown JSON se vuelve brands probados.
   const raw: unknown = await c.req.json().catch(() => null);
   const shaped = RefundRequestDto.safeParse(raw);
-  if (!shaped.success) return c.json({ error: shaped.error.message }, 400);
+  if (!shaped.success) return c.json({ error: "invalid request" }, 400);
   const email = parseEmail(shaped.data.email);
   if (!email.ok) {
     const e: DomainError = { kind: "InvalidEmail", error: email.error };
+    return c.json({ error: domainToMessage(e) }, domainToStatus(e));
+  }
+  const orderId = parseOrderId(shaped.data.orderId);
+  if (!orderId.ok) {
+    const e: DomainError = { kind: "InvalidOrderId" };
     return c.json({ error: domainToMessage(e) }, domainToStatus(e));
   }
   const amount = parseCents(shaped.data.amountCents);
@@ -583,9 +683,11 @@ app.post("/refund", async (c) => {
     return c.json({ error: domainToMessage(e) }, domainToStatus(e));
   }
   // 2. Rehidratar estado minimo, llamar al core puro.
+  // Nunca filtres `shaped.error.message` ni email crudo al cliente: loguea conteo + request_id/order_id.
+  // Prod: exige `Idempotency-Key` con dedup, emite `refund_total{kind}`, manten el core sync fuera del event loop.
   const refund = calculateRefund(
-    { orderId: shaped.data.orderId, balance: 10_000, alreadyRefunded: false },
-    amount.value, { maxCents: 500_000 },
+    { orderId: orderId.value, balance: mintCentsUnchecked(10_000), alreadyRefunded: false },
+    amount.value, { maxCents: mintCentsUnchecked(500_000) },
   );
   if (!refund.ok) return c.json({ error: domainToMessage(refund.error) }, domainToStatus(refund.error));
   // 3. Mapear a transporte. Sin logica aqui.
