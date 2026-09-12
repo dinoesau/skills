@@ -1,6 +1,6 @@
 ---
 name: paper-craft
-description: Structure research articles, systematic reviews, philosophy essays, humanities papers, and opinion pieces to peer-review standards. Use when user asks to write or improve a paper, article, thesis, literature review, abstract, or op-ed, or mentions IMRaD, PRISMA, citations, or journal submission.
+description: Structure essays, research articles, systematic reviews, philosophy essays, humanities papers, and opinion pieces to peer-review standards. Use when user asks to write or improve an essay, paper, article, thesis, literature review, abstract, or op-ed, or mentions IMRaD, PRISMA, citations, or journal submission.
 license: MIT
 allowed-tools: Bash
 ---
