@@ -27,6 +27,13 @@
       "skills": [
         "ai-engineering"
       ]
+    },
+    {
+      "title": "Thinking",
+      "description": "Skills para razonar, argumentar y escribir con rigor",
+      "skills": [
+        "logic"
+      ]
     }
   ]
 }
