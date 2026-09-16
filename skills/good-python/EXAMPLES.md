@@ -82,17 +82,18 @@ Before: niveles anidados por cada parseo.
 After: happy path lineal con riel de error tipado.
 
 ```python
-# After: version recomendada con union tipada, sin forja ni f-strings.
+# After: version recomendada con union tipada, sin forja.
 def build_order_clean(raw_email: object, raw_amount: object, raw_user_id: object) -> Result[OrderShape, DomainError]:
     email = parse_email(raw_email)
     if isinstance(email, Err):
         return Err(InvalidEmail(detail=email.error))
     amount = Cents.parse(raw_amount)
     if isinstance(amount, Err):
-        return Err(InvalidAmount(detail="invalid amount"))
+        return Err(InvalidAmount(detail=amount.error))
     user = UserId.parse(raw_user_id)
     if isinstance(user, Err):
-        return Err(user.error)
+        return Err(InvalidUser(detail=user.error))
+    # Narrowing-assert permitido tras chequeo exhaustivo: re-expresa lo probado, no invariante de dominio.
     assert isinstance(email, Ok) and isinstance(amount, Ok) and isinstance(user, Ok)
     return Ok(OrderShape(user_id=user.value, email=email.value, amount=amount.value, method=Cash()))
 ```
@@ -152,4 +153,45 @@ def charge_once(raw_amount: object) -> None:
     if isinstance(parsed, Err):
         return
     apply_charge(parsed.value)
+```
+
+## 9. Payload stringly vs `LastFour` / `Iban`
+
+Before: `last_four: str` acepta `"12"`.
+After: solo valores parseados llegan al core.
+
+```python
+# Before: stringly.
+@dataclass(frozen=True, slots=True)
+class CardOld:
+    kind: Literal["card"] = "card"
+    last_four: str
+
+# After: `parse_last_four("12")` es Err, `parse_last_four("4242")` es Ok.
+# `parse_iban` exige 15-32 + `^[A-Z]{2}[0-9A-Z]+$` IGNORECASE.
+# `Card` / `Transfer` con `kw_only=True` sin defaults.
+def fee_for_typed(method: PaymentMethod) -> int:
+    return fee_for(method)  # exhaustivo via assert_never
+```
+
+## 10. Status `int` vs `HttpStatus` cerrado
+
+Before: `domain_to_status -> int`, `= 999` pasa.
+After: `HttpStatus = Literal[400, 404, 422, 500]`, `= 999` falla `[assignment]`.
+
+```python
+# After: tipar las tres (domain_to_status, app_to_status, report_app_error).
+# Cubrir las 8-10 variantes, sin wildcard en dominio.
+def status_for(error: DomainError) -> HttpStatus:
+    return domain_to_status(error)
+```
+
+## 11. Snapshot inline vs puerto `OrderRepository`
+
+Before: handler fabrica `OrderSnapshot(..., balance=_mint_after_check(10_000))` inline y usa `UserId.parse` para `order_id`.
+After: puerto `Protocol` + `Depends` + fake in-memory, `OrderId.parse -> InvalidOrderId` 400, `None -> UserNotFound` 404.
+
+```python
+# After: ver REFERENCE.md#9-arquitectura-functional-core-imperative-shell.
+# `loaded = await repo.find(order_id.value)`; `None` es 404, `DbError` es 500.
 ```

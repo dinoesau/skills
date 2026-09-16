@@ -61,12 +61,16 @@ pub fn refund_share_partial(amount: u64, parts: u64) -> u64 {
     amount / parts
 }
 
-// After.
+// After: vive en `src/domain/cents.rs` con `Cents` para que `from_raw` siga privado.
 pub fn refund_share_total(amount: Cents, parts: u64) -> Result<Cents, SplitError> {
     if parts == 0 {
         return Err(SplitError::EmptyParts);
     }
-    Ok(Cents::from_raw(amount.value() / parts))
+    let raw = amount.value();
+    if raw % parts != 0 {
+        return Err(SplitError::NotDivisible { amount: raw, parts });
+    }
+    Ok(Cents::from_raw(raw / parts))
 }
 ```
 
@@ -77,15 +81,23 @@ After: happy path lineal con riel de error tipado.
 
 ```rust
 // After: version recomendada.
-pub fn build_order_clean(raw_email: String, raw_amount: i64) -> Result<Order, OrderError> {
+pub fn build_order_clean(
+    raw_order_id: &str,
+    raw_user_id: &str,
+    raw_email: &str,
+    raw_amount: i64,
+) -> Result<Order, OrderError> {
+    let id = OrderId::parse(raw_order_id).map_err(OrderError::OrderId)?;
+    let user_id = UserId::parse(raw_user_id).map_err(OrderError::UserId)?;
     let email = Email::parse(raw_email).map_err(OrderError::Email)?;
     let amount = Cents::parse(raw_amount).map_err(OrderError::Money)?;
-    let id = UserId::parse("placeholder".to_string()).map_err(OrderError::User)?;
     Ok(Order {
         id,
+        user_id,
         email,
         amount,
         method: PaymentMethod::Cash,
+        already_refunded: false,
     })
 }
 ```
@@ -101,13 +113,9 @@ pub fn process(raw: String) -> Result<String, String> {
     Err("something failed".to_string())
 }
 
-// After.
-pub fn classify_failure(err: &DomainError) -> u16 {
-    match err {
-        DomainError::InvalidEmail(_) | DomainError::InvalidAmount | DomainError::InvalidOrderId => 400,
-        DomainError::UserNotFound => 404,
-        DomainError::ExceedsMax | DomainError::InsufficientFunds | DomainError::AlreadyRefunded { .. } => 422,
-    }
+// After: mapeo unico via `refund_status_code`, usado por `IntoResponse`.
+pub fn classify_failure(err: &DomainError) -> axum::http::StatusCode {
+    crate::domain::error::refund_status_code(err)
 }
 ```
 
@@ -123,7 +131,10 @@ pub struct OrderFlag {
 }
 
 // After: transicion por movimiento.
-let draft = Order::<Draft>::new("ord_1".to_string(), Cents::parse(5000).unwrap());
+// Lifecycle usa StagedOrder, nunca el Order del core.
+let order_id = OrderId::parse("ord_1").expect("fixture is valid");
+let email = Email::parse("user@example.com").expect("fixture is valid");
+let draft = StagedOrder::<Draft>::new(order_id, email, Cents::parse(5000).expect("fixture is valid"));
 let submitted = draft.submit();
 let paid = submitted.pay();
 println!("{}", paid.receipt());
@@ -151,7 +162,25 @@ let refund = calculate_refund(&order, requested, &policy)?;
 
 // Shell: parsea en el borde y retorna DTO.
 // Forma invalida es InvalidOrderId 400; fila faltante es UserNotFound 404.
-let email = Email::parse(raw.email).map_err(DomainError::InvalidEmail)?;
-let user_id = UserId::parse(raw.order_id).map_err(|_| DomainError::InvalidOrderId)?;
-let amount = Cents::parse(raw.amount_cents).map_err(|_| DomainError::InvalidAmount)?;
+// Carga via trait `OrderRepository` con `State(AppState)`, `None -> UserNotFound`, `Err -> Database`.
+let order_id = OrderId::parse(&raw.order_id).map_err(DomainError::InvalidOrderId)?;
+let _request_email = Email::parse(&raw.email).map_err(DomainError::InvalidEmail)?;
+let amount = Cents::parse(raw.amount_cents).map_err(DomainError::InvalidAmount)?;
+let order = state.repo.find(&order_id).await.map_err(AppError::Database)?.ok_or(DomainError::UserNotFound)?;
+```
+
+## 9. Payment con campos publicos vs privados + `parse`
+
+Before: `pub last_four: String` compila verbatim.
+After: campo privado, `E0308` si pasas `&str` donde va `CardDetails`.
+
+```rust
+// Before: forjable desde cualquier modulo.
+pub struct CardDetailsOld { pub last_four: String }
+
+// After: solo `CardDetails::parse("4242")` crea; `parse("12")` es Err.
+// `TransferDetails::parse` exige 15-34 chars, dos letras iniciales, alfanumerico ASCII, conteo por chars.
+// Mas `as_str()` para lectura sin forja.
+let card = CardDetails::parse("4242")?;
+let transfer = TransferDetails::parse("DE89370400440532013000")?;
 ```
