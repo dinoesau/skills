@@ -9,7 +9,7 @@ description: >
 license: MIT
 allowed-tools: Bash
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # Good-Python - Modelado de dominio funcional en Python

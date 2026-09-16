@@ -124,17 +124,27 @@ pub enum EmailError {
 }
 
 impl Email {
-    pub fn parse(raw: String) -> Result<Self, EmailError> {
-        let raw = raw.trim().to_string();
-        let (_, domain) = raw.split_once('@').ok_or(EmailError::MissingAt)?;
-        let local = raw.split('@').next().unwrap_or_default();
+    pub fn parse(raw: &str) -> Result<Self, EmailError> {
+        if raw.len() > 1024 {
+            // Acota trabajo de trim/scan antes de tocar el input.
+            return Err(EmailError::InvalidDomain);
+        }
+        let trimmed = raw.trim();
+        if trimmed.len() > 254 || trimmed.chars().any(|c| c.is_whitespace()) {
+            return Err(EmailError::InvalidDomain);
+        }
+        // Single-pass: split_once mas chequeo de @ trailing rechaza a@b@c y a@@b.com.
+        let (local, domain) = trimmed.split_once('@').ok_or(EmailError::MissingAt)?;
+        if domain.contains('@') {
+            return Err(EmailError::MissingAt);
+        }
         if local.is_empty() {
             return Err(EmailError::EmptyLocalPart);
         }
-        if !domain.contains('.') {
+        if !domain.contains('.') || domain.contains("..") || domain.starts_with('.') || domain.ends_with('.') {
             return Err(EmailError::InvalidDomain);
         }
-        Ok(Self(raw))
+        Ok(Self(trimmed.to_string()))
     }
 
     pub fn as_str(&self) -> &str {
@@ -178,9 +188,9 @@ pub enum EmailError {
 impl fmt::Display for EmailError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingAt => write!(f, "email must contain @"),
+            Self::MissingAt => write!(f, "email must contain a single @"),
             Self::EmptyLocalPart => write!(f, "email local part is empty"),
-            Self::InvalidDomain => write!(f, "email domain must contain ."),
+            Self::InvalidDomain => write!(f, "email domain is invalid"),
         }
     }
 }
@@ -189,16 +199,26 @@ impl std::error::Error for EmailError {}
 
 impl Email {
     /// Smart constructor: la unica via para construir un Email.
-    pub fn parse(raw: String) -> Result<Self, EmailError> {
-        let trimmed = raw.trim().to_string();
+    /// Toma &str y aloca solo en Ok.
+    pub fn parse(raw: &str) -> Result<Self, EmailError> {
+        if raw.len() > 1024 {
+            return Err(EmailError::InvalidDomain);
+        }
+        let trimmed = raw.trim();
+        if trimmed.len() > 254 || trimmed.chars().any(|c| c.is_whitespace()) {
+            return Err(EmailError::InvalidDomain);
+        }
         let (local, domain) = trimmed.split_once('@').ok_or(EmailError::MissingAt)?;
+        if domain.contains('@') {
+            return Err(EmailError::MissingAt);
+        }
         if local.is_empty() {
             return Err(EmailError::EmptyLocalPart);
         }
-        if !domain.contains('.') {
+        if !domain.contains('.') || domain.contains("..") || domain.starts_with('.') || domain.ends_with('.') {
             return Err(EmailError::InvalidDomain);
         }
-        Ok(Self(trimmed))
+        Ok(Self(trimmed.to_string()))
     }
 
     pub fn as_str(&self) -> &str {
@@ -210,7 +230,7 @@ impl FromStr for Email {
     type Err = EmailError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse(s.to_string())
+        Self::parse(s)
     }
 }
 
@@ -240,6 +260,56 @@ pub struct Cents(u64);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MoneyError {
     NonPositive,
+    ExceedsMax { value: u64, max: u64 },
+}
+
+impl std::fmt::Display for MoneyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NonPositive => write!(f, "amount must be positive"),
+            Self::ExceedsMax { value, max } => write!(f, "amount {value} exceeds maximum {max}"),
+        }
+    }
+}
+
+impl std::error::Error for MoneyError {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct OrderId(String);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OrderIdError {
+    Empty,
+}
+
+impl std::fmt::Display for OrderIdError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => write!(f, "order id must be non-empty"),
+        }
+    }
+}
+
+impl std::error::Error for OrderIdError {}
+
+impl OrderId {
+    pub fn parse(raw: &str) -> Result<Self, OrderIdError> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed.len() > 64 {
+            return Err(OrderIdError::Empty);
+        }
+        Ok(Self(trimmed.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for OrderId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 impl Cents {
@@ -247,11 +317,11 @@ impl Cents {
         if raw <= 0 {
             return Err(MoneyError::NonPositive);
         }
-        Ok(Self(raw as u64))
+        Ok(Self::from_raw(raw as u64))
     }
 
-    /// Uso interno del crate solo despues de prueba previa.
-    pub(crate) fn from_raw(value: u64) -> Self {
+    fn from_raw(value: u64) -> Self {
+        // Privado a cents.rs. refund_share_total vive en este mismo archivo.
         Self(value)
     }
 
@@ -276,13 +346,36 @@ pub enum UserIdError {
     Empty,
 }
 
+impl std::fmt::Display for UserIdError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => write!(f, "user id must be a non-empty uuid"),
+        }
+    }
+}
+
+impl std::error::Error for UserIdError {}
+
+impl std::fmt::Display for UserId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 impl UserId {
-    pub fn parse(raw: String) -> Result<Self, UserIdError> {
-        let trimmed = raw.trim().to_string();
+    pub fn parse(raw: &str) -> Result<Self, UserIdError> {
+        if raw.len() > 64 {
+            return Err(UserIdError::Empty);
+        }
+        let trimmed = raw.trim();
         if trimmed.is_empty() {
             return Err(UserIdError::Empty);
         }
-        Ok(Self(trimmed))
+        // Regla unica de la serie: uuid. Requiere uuid = "1" en Cargo.toml.
+        if uuid::Uuid::parse_str(trimmed).is_err() {
+            return Err(UserIdError::Empty);
+        }
+        Ok(Self(trimmed.to_string()))
     }
 
     pub fn as_str(&self) -> &str {
@@ -310,13 +403,75 @@ Los sum types enumeran alternativas exclusivas.
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CardDetails {
-    pub last_four: String,
+    last_four: String,
+}
+
+impl CardDetails {
+    pub fn parse(last_four: &str) -> Result<Self, LastFourError> {
+        let t = last_four.trim();
+        if t.len() != 4 || !t.chars().all(|c| c.is_ascii_digit()) {
+            return Err(LastFourError::Invalid);
+        }
+        Ok(Self { last_four: t.to_string() })
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.last_four
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TransferDetails {
-    pub iban: String,
+pub enum LastFourError {
+    Invalid,
 }
+
+impl std::fmt::Display for LastFourError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid => write!(f, "last_four must be 4 digits"),
+        }
+    }
+}
+
+impl std::error::Error for LastFourError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransferDetails {
+    iban: String,
+}
+
+impl TransferDetails {
+    pub fn parse(iban: &str) -> Result<Self, IbanError> {
+        let t = iban.trim();
+        let mut chars = t.chars();
+        let ok_head = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+            && chars.next().is_some_and(|c| c.is_ascii_alphabetic());
+        let ok_tail = t.bytes().all(|b| b.is_ascii_alphanumeric());
+        if !(15..=34).contains(&t.chars().count()) || !ok_head || !ok_tail {
+            return Err(IbanError::Invalid);
+        }
+        Ok(Self { iban: t.to_string() })
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.iban
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IbanError {
+    Invalid,
+}
+
+impl std::fmt::Display for IbanError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid => write!(f, "iban must be 15-34 chars, starting with two letters"),
+        }
+    }
+}
+
+impl std::error::Error for IbanError {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaymentMethod {
@@ -333,13 +488,21 @@ Un `match` sobre `PaymentMethod` debe cubrir cada brazo o el build falla.
 Esa exhaustividad es una prueba sobre tus ramas de negocio.
 
 ```rust
+use crate::domain::cents::Cents;
+use crate::domain::email::Email;
+use crate::domain::order_id::{OrderId, OrderIdError};
+use crate::domain::user_id::UserId;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Order {
-    pub id: UserId,
+    pub id: OrderId,
+    pub user_id: UserId,
     pub email: Email,
     pub amount: Cents,
     pub method: PaymentMethod,
+    pub already_refunded: bool,
 }
+```
 ```
 
 Una funcion total esta definida para el 100 por ciento de sus inputs.
@@ -353,16 +516,33 @@ pub fn refund_share_partial(amount: u64, parts: u64) -> u64 {
 }
 
 // Total: cada input mapea a un resultado explicito.
+// Vive en `src/domain/cents.rs` con `Cents`, para que `from_raw` siga privado.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SplitError {
     EmptyParts,
+    NotDivisible { amount: u64, parts: u64 },
 }
+
+impl std::fmt::Display for SplitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyParts => write!(f, "parts must be non-zero"),
+            Self::NotDivisible { amount, parts } => write!(f, "{amount} is not divisible by {parts}"),
+        }
+    }
+}
+
+impl std::error::Error for SplitError {}
 
 pub fn refund_share_total(amount: Cents, parts: u64) -> Result<Cents, SplitError> {
     if parts == 0 {
         return Err(SplitError::EmptyParts);
     }
-    Ok(Cents::from_raw(amount.value() / parts))
+    let raw = amount.value();
+    if raw % parts != 0 {
+        return Err(SplitError::NotDivisible { amount: raw, parts });
+    }
+    Ok(Cents::from_raw(raw / parts))
 }
 ```
 
@@ -375,30 +555,48 @@ El tipo de error dice al handler que status retornar.
 Asi un typo 400 nunca se disfraza de outage 500.
 
 ```rust
+use crate::domain::cents::{Cents, MoneyError};
+use crate::domain::email::{Email, EmailError};
+use crate::domain::order::{Order, PaymentMethod};
+use crate::domain::order_id::{OrderId, OrderIdError};
+use crate::domain::user_id::{UserId, UserIdError};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OrderError {
     Email(EmailError),
     Money(MoneyError),
-    User(UserIdError),
+    UserId(UserIdError),
+    OrderId(OrderIdError),
 }
 
-pub fn build_order(raw_email: String, raw_amount: i64) -> Result<Order, OrderError> {
-    Email::parse(raw_email)
-        .map_err(OrderError::Email)
-        .and_then(|email| {
-            Cents::parse(raw_amount)
-                .map_err(OrderError::Money)
-                .map(|amount| (email, amount))
-        })
-        .and_then(|(email, amount)| {
-            UserId::parse("placeholder".to_string())
-                .map_err(OrderError::User)
-                .map(|id| Order {
-                    id,
-                    email,
-                    amount,
-                    method: PaymentMethod::Cash,
+pub fn build_order(
+    raw_order_id: &str,
+    raw_user_id: &str,
+    raw_email: &str,
+    raw_amount: i64,
+) -> Result<Order, OrderError> {
+    OrderId::parse(raw_order_id)
+        .map_err(OrderError::OrderId)
+        .and_then(|order_id| {
+            UserId::parse(raw_user_id)
+                .map_err(OrderError::UserId)
+                .and_then(|user_id| {
+                    Email::parse(raw_email)
+                        .map_err(OrderError::Email)
+                        .and_then(|email| {
+                            Cents::parse(raw_amount)
+                                .map_err(OrderError::Money)
+                                .map(|amount| (order_id, user_id, email, amount))
+                        })
                 })
+        })
+        .map(|(order_id, user_id, email, amount)| Order {
+            id: order_id,
+            user_id,
+            email,
+            amount,
+            method: PaymentMethod::Cash,
+            already_refunded: false,
         })
 }
 ```
@@ -408,15 +606,23 @@ Ambas versiones conservan los dos rieles.
 La version con `?` es lineal y mas legible.
 
 ```rust
-pub fn build_order_clean(raw_email: String, raw_amount: i64) -> Result<Order, OrderError> {
+pub fn build_order_clean(
+    raw_order_id: &str,
+    raw_user_id: &str,
+    raw_email: &str,
+    raw_amount: i64,
+) -> Result<Order, OrderError> {
+    let id = OrderId::parse(raw_order_id).map_err(OrderError::OrderId)?;
+    let user_id = UserId::parse(raw_user_id).map_err(OrderError::UserId)?;
     let email = Email::parse(raw_email).map_err(OrderError::Email)?;
     let amount = Cents::parse(raw_amount).map_err(OrderError::Money)?;
-    let id = UserId::parse("placeholder".to_string()).map_err(OrderError::User)?;
     Ok(Order {
         id,
+        user_id,
         email,
         amount,
         method: PaymentMethod::Cash,
+        already_refunded: false,
     })
 }
 ```
@@ -524,23 +730,27 @@ Cada variante es un hecho de negocio que el llamador debe manejar.
 ```rust
 // src/domain/error.rs
 use thiserror::Error;
+use crate::domain::cents::MoneyError;
+use crate::domain::email::EmailError;
+use crate::domain::order_id::OrderId;
+use crate::domain::user_id::UserIdError;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DomainError {
     #[error("invalid email: {0}")]
     InvalidEmail(#[from] EmailError),
-    #[error("invalid amount: must be positive")]
-    InvalidAmount,
-    #[error("amount exceeds policy maximum")]
-    ExceedsMax,
-    #[error("invalid order id")]
-    InvalidOrderId,
+    #[error("invalid user id: {0}")]
+    InvalidUserId(#[from] UserIdError),
+    #[error("invalid order id: {0}")]
+    InvalidOrderId(#[from] OrderIdError),
+    #[error(transparent)]
+    InvalidAmount(#[from] MoneyError),
     #[error("user not found")]
     UserNotFound,
     #[error("insufficient funds")]
     InsufficientFunds,
-    #[error("refund already processed")]
-    AlreadyRefunded { order_id: String },
+    #[error("refund already processed for order {order_id}")]
+    AlreadyRefunded { order_id: OrderId },
 }
 ```
 
@@ -549,11 +759,16 @@ Quitar una variante rompe este match en compilacion.
 Esa ruptura es la funcionalidad buscada.
 
 ```rust
-pub fn refund_status_code(err: &DomainError) -> u16 {
+use crate::domain::error::DomainError;
+
+pub fn refund_status_code(err: &DomainError) -> axum::http::StatusCode {
+    use axum::http::StatusCode;
+    // Quitar una variante rompe este match en compilacion. Esa es la funcionalidad.
+    // Mapeo unico usado por `IntoResponse` abajo.
     match err {
-        DomainError::InvalidEmail(_) | DomainError::InvalidAmount | DomainError::InvalidOrderId => 400,
-        DomainError::UserNotFound => 404,
-        DomainError::ExceedsMax | DomainError::InsufficientFunds | DomainError::AlreadyRefunded { .. } => 422,
+        DomainError::InvalidEmail(_) | DomainError::InvalidUserId(_) | DomainError::InvalidOrderId(_) | DomainError::InvalidAmount(MoneyError::NonPositive) => StatusCode::BAD_REQUEST,
+        DomainError::UserNotFound => StatusCode::NOT_FOUND,
+        DomainError::InvalidAmount(MoneyError::ExceedsMax { .. }) | DomainError::InsufficientFunds | DomainError::AlreadyRefunded { .. } => StatusCode::UNPROCESSABLE_ENTITY,
     }
 }
 ```
@@ -611,7 +826,11 @@ Esto es diseno type-driven estilo Brady aplicado a ciclos de negocio.
 ```rust
 // src/domain/order_state.rs
 use std::marker::PhantomData;
+use crate::domain::cents::Cents;
+use crate::domain::email::Email;
+use crate::domain::order_id::OrderId;
 
+// Lifecycle usa StagedOrder, nunca el Order del core, para no colisionar.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Draft;
 
@@ -621,46 +840,52 @@ pub struct Submitted;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paid;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Order<State> {
-    id: String,
+// Sin Clone en Paid: clonar duplicaria el workflow y romperia linealidad.
+#[derive(Debug, PartialEq, Eq)]
+pub struct StagedOrder<State> {
+    // Agregado completo: mismo id, email y monto que el Order del core, mas etapa.
+    id: OrderId,
+    email: Email,
     amount: Cents,
     state: PhantomData<State>,
 }
 
-impl Order<Draft> {
-    pub fn new(id: String, amount: Cents) -> Self {
+impl StagedOrder<Draft> {
+    pub fn new(id: OrderId, email: Email, amount: Cents) -> Self {
         Self {
             id,
+            email,
             amount,
             state: PhantomData,
         }
     }
 
-    pub fn submit(self) -> Order<Submitted> {
+    pub fn submit(self) -> StagedOrder<Submitted> {
         // self se mueve y se destruye aqui.
         // El valor Draft ya no se puede reusar.
-        Order {
+        StagedOrder {
             id: self.id,
+            email: self.email,
             amount: self.amount,
             state: PhantomData,
         }
     }
 }
 
-impl Order<Submitted> {
-    pub fn pay(self) -> Order<Paid> {
-        Order {
+impl StagedOrder<Submitted> {
+    pub fn pay(self) -> StagedOrder<Paid> {
+        StagedOrder {
             id: self.id,
+            email: self.email,
             amount: self.amount,
             state: PhantomData,
         }
     }
 }
 
-impl Order<Paid> {
+impl StagedOrder<Paid> {
     pub fn receipt(&self) -> String {
-        format!("paid {} cents for {}", self.amount.value(), self.id)
+        format!("paid {} cents for {}", self.amount.value(), self.id.as_str())
     }
 }
 ```
@@ -671,7 +896,17 @@ El valor viejo se mueve y desaparece.
 No hay use-after-free logico donde handles `Draft` rancios se reenvian.
 
 ```rust
-let draft = Order::<Draft>::new("ord_1".to_string(), Cents::parse(5000).unwrap());
+// Solo bootstrap de test o ejemplo. Codigo de produccion retorna Result, nunca unwrap.
+use crate::domain::email::Email;
+use crate::domain::order_id::OrderId;
+
+let order_id = OrderId::parse("ord_1").expect("fixture is valid");
+let email = Email::parse("user@example.com").expect("fixture is valid");
+let draft = StagedOrder::<Draft>::new(
+    order_id,
+    email,
+    Cents::parse(5000).expect("fixture is valid"),
+);
 let submitted = draft.submit();
 // draft.submit(); // Error de compilacion: valor movido.
 let paid = submitted.pay();
@@ -707,12 +942,21 @@ pub enum EmailRefError {
 
 impl<'a> EmailRef<'a> {
     pub fn parse(raw: &'a str) -> Result<Self, EmailRefError> {
+        if raw.len() > 1024 {
+            return Err(EmailRefError::InvalidDomain);
+        }
         let trimmed = raw.trim();
+        if trimmed.len() > 254 || trimmed.chars().any(|c| c.is_whitespace()) {
+            return Err(EmailRefError::InvalidDomain);
+        }
         let (local, domain) = trimmed.split_once('@').ok_or(EmailRefError::MissingAt)?;
+        if domain.contains('@') {
+            return Err(EmailRefError::MissingAt);
+        }
         if local.is_empty() {
             return Err(EmailRefError::EmptyLocalPart);
         }
-        if !domain.contains('.') {
+        if !domain.contains('.') || domain.contains("..") || domain.starts_with('.') || domain.ends_with('.') {
             return Err(EmailRefError::InvalidDomain);
         }
         Ok(Self(trimmed))
@@ -723,8 +967,15 @@ impl<'a> EmailRef<'a> {
     }
 
     pub fn to_owned_email(self) -> Email {
-        // Unico punto de upgrade de prestado a owned.
-        Email::parse(self.0.to_string()).expect("borrowed was already valid")
+        // Mismo modulo que Email, acceso a campo privado permitido.
+        // Sin revalidar y sin expect: lo prestado ya era valido.
+        Email(self.0.to_owned())
+    }
+}
+
+impl<'a> From<EmailRef<'a>> for Email {
+    fn from(value: EmailRef<'a>) -> Self {
+        value.to_owned_email()
     }
 }
 ```
@@ -778,16 +1029,10 @@ Define el core puro primero.
 
 ```rust
 // src/core/refunds.rs
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RefundPolicy {
-    pub max_cents: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Refund {
-    pub order_id: String,
-    pub amount: Cents,
-}
+// Refund, RefundPolicy y Order viven en domain::order. El core los importa, nunca los redefine.
+use crate::domain::cents::{Cents, MoneyError};
+use crate::domain::error::DomainError;
+use crate::domain::order::{Order, Refund};
 
 pub fn calculate_refund(
     order: &Order,
@@ -796,18 +1041,31 @@ pub fn calculate_refund(
 ) -> Result<Refund, DomainError> {
     // Funcion pura: sin IO, sin async, sin globales.
     // Todos los inputs ya son tipos probados.
-    // Nota: AlreadyRefunded se chequea desde flag persistente antes de llamar, o pasa OrderSnapshot con already_refunded.
+    // Naming: order.amount juega el rol de balance (fondos disponibles) como en TS/Python OrderSnapshot.balance.
+    if order.already_refunded {
+        return Err(DomainError::AlreadyRefunded {
+            order_id: order.id.clone(),
+        });
+    }
     if requested.value() > order.amount.value() {
         return Err(DomainError::InsufficientFunds);
     }
-    if requested.value() > policy.max_cents {
-        return Err(DomainError::ExceedsMax);
+    if requested.value() > policy.max_cents.value() {
+        return Err(DomainError::InvalidAmount(MoneyError::ExceedsMax {
+            value: requested.value(),
+            max: policy.max_cents.value(),
+        }));
     }
     Ok(Refund {
-        order_id: order.id.as_str().to_string(),
+        order_id: order.id.clone(),
         amount: requested,
     })
 }
+// NOTA: Refund, RefundPolicy y Order viven en domain::order para que core y shell compartan un Order.
+// size_of::<DomainError>() es 32 bytes en 64-bit por AlreadyRefunded(OrderId).
+// Boxea el id si cae en un Result caliente. Mide con criterion, no por dogma.
+// AlreadyRefunded sale del flag persistido already_refunded.
+// StagedOrder previene doble pay a nivel de tipos (sin pay en Paid). El flag cubre persistencia across restarts.
 ```
 
 Los DTOs de Serde se quedan tontos y crudos en el shell.
@@ -832,36 +1090,93 @@ pub struct RefundResponseDto {
 }
 ```
 
-El handler de Axum une los dos mundos y nada mas.
-Parsea en el borde, rehidrata estado minimo, llama al core puro y mapea a DTO.
-Sin logica de negocio aqui.
+El handler de Axum une los dos mundos y nada mas. Desacoplalo con puerto trait en la capa app: solo habla tipos de dominio. El shell provee el adapter y Axum lo inyecta via `State`.
+
+```rust
+// src/app/ports.rs
+use crate::domain::order::Order;
+use crate::domain::order_id::OrderId;
+
+pub trait OrderRepository: Send + Sync + 'static {
+    async fn find(&self, id: &OrderId) -> Result<Option<Order>, sqlx::Error>;
+}
+```
 
 ```rust
 // src/shell/handlers.rs
+use std::sync::Arc;
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use crate::app::error::AppError;
+use crate::app::ports::OrderRepository;
+use crate::core::refunds::{RefundPolicy, calculate_refund};
+use crate::domain::error::DomainError;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub repo: Arc<dyn OrderRepository>,
+    pub policy: RefundPolicy,
+}
+
+// src/shell/sqlx_repo.rs
+pub struct SqlxOrderRepo {
+    pool: sqlx::PgPool,
+}
+
+impl OrderRepository for SqlxOrderRepo {
+    async fn find(&self, id: &OrderId) -> Result<Option<Order>, sqlx::Error> {
+        // SELECT id, user_id, email, amount_cents FROM orders WHERE id = $1.
+        // Mapea la fila con OrderId::parse y amigos, para que filas DB re-entren parseadas.
+        let _ = (id, &self.pool);
+        Ok(None)
+    }
+}
+
+// tests/fakes.rs, usable tambien en dev.
+use std::collections::HashMap;
+use std::sync::Mutex;
+use crate::domain::order::Order;
+use crate::domain::order_id::OrderId;
+
+#[derive(Default)]
+pub struct InMemoryOrderRepo {
+    orders: Mutex<HashMap<String, Order>>,
+}
+
+impl OrderRepository for InMemoryOrderRepo {
+    async fn find(&self, id: &OrderId) -> Result<Option<Order>, sqlx::Error> {
+        Ok(self
+            .orders
+            .lock()
+            .expect("test lock is not poisoned")
+            .get(id.as_str())
+            .cloned())
+    }
+}
 
 pub async fn refund_handler(
-    State(policy): State<RefundPolicy>,
+    State(state): State<AppState>,
     Json(raw): Json<RefundRequestDto>,
 ) -> Result<impl IntoResponse, AppError> {
-    // 1. Parsear en el borde: String e i64 se vuelven Email, UserId, Cents.
-    // Forma invalida es InvalidOrderId 400; forma valida pero fila faltante es UserNotFound 404.
-    let email = Email::parse(raw.email).map_err(DomainError::InvalidEmail)?;
-    let user_id = UserId::parse(raw.order_id).map_err(|_| DomainError::InvalidOrderId)?;
-    let amount = Cents::parse(raw.amount_cents).map_err(|_| DomainError::InvalidAmount)?;
-
-    // 2. Rehidratar estado minimo y llamar al core puro.
-    let order = Order {
-        id: user_id,
-        email,
-        amount,
-        method: PaymentMethod::Cash,
-    };
-    let refund = calculate_refund(&order, amount, &policy)?;
-
+    use crate::domain::cents::Cents;
+    use crate::domain::email::Email;
+    use crate::domain::order_id::OrderId;
+    // 1. Parsear en el borde. Email malformado rechaza antes de tocar DB.
+    // Email de DB sigue autoritativo; email del request prueba forma, no identidad.
+    let order_id = OrderId::parse(&raw.order_id).map_err(DomainError::InvalidOrderId)?;
+    let _request_email = Email::parse(&raw.email).map_err(DomainError::InvalidEmail)?;
+    let amount = Cents::parse(raw.amount_cents).map_err(DomainError::InvalidAmount)?;
+    // 2. Cargar estado persistido via puerto. Nunca fabricar Order desde el monto del request.
+    let order = state
+        .repo
+        .find(&order_id)
+        .await
+        .map_err(AppError::Database)?
+        .ok_or(DomainError::UserNotFound)?;
+    let refund = calculate_refund(&order, amount, &state.policy)?;
     // 3. Mapear a DTO. Sin logica de negocio aqui.
+    // OrderId a String necesita as_str().to_owned(). Nunca muevas el newtype sin convertir.
     let body = RefundResponseDto {
-        order_id: refund.order_id,
+        order_id: refund.order_id.as_str().to_owned(),
         refunded_cents: refund.amount.value(),
     };
     Ok((StatusCode::OK, Json(body)))
@@ -876,24 +1191,32 @@ Los errores de infra se vuelven 500 generico sin filtrar detalles.
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
         let (status, message) = match &self {
-            Self::Domain(err) => match err {
-                DomainError::InvalidEmail(_) | DomainError::InvalidAmount | DomainError::InvalidOrderId => {
-                    (StatusCode::BAD_REQUEST, err.to_string())
-                }
-                DomainError::UserNotFound => (StatusCode::NOT_FOUND, err.to_string()),
-                DomainError::ExceedsMax | DomainError::InsufficientFunds | DomainError::AlreadyRefunded { .. } => {
-                    (StatusCode::UNPROCESSABLE_ENTITY, err.to_string())
-                }
-            },
-            Self::Database(_) | Self::Gateway(_) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal error".to_string(),
-            ),
+            Self::Domain(err) => {
+                // Nunca dupliques la tabla de arriba: el status sale de refund_status_code.
+                // Nunca loguees email crudo via Display aqui; el brazo infra abajo redacta.
+                (crate::domain::error::refund_status_code(err), err.to_string())
+            }
+            Self::Database(e) => {
+                tracing::error!(error = %e, "infrastructure failure");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal error".to_string(),
+                )
+            }
+            Self::Gateway(e) => {
+                tracing::error!(error = %e, "infrastructure failure");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal error".to_string(),
+                )
+            }
         };
         (status, Json(serde_json::json!({ "error": message }))).into_response()
     }
 }
 ```
+
+Notas de produccion: exige `Idempotency-Key` en POST /refund con dedup para que reintentos nunca cobren doble. Emite contador `refund_total{kind}` e histograma de latencia con spans request_id/order_id. Nunca loguees email crudo ni DSNs via Display. Manten `calculate_refund` sync y rapido; `EmailRef` debe promoverse a owned antes de cualquier await para que futures sean 'static + Send. Testing limpio: `calculate_refund` con structs planos sin mocks; handler con `InMemoryOrderRepo` mas `tower::ServiceExt::oneshot` y payloads JSON reales. Cambia el adapter sin tocar el core porque el handler solo depende del trait.
 
 El testing se divide limpio.
 Prueba `calculate_refund` con structs planos y sin mocks.
@@ -907,16 +1230,16 @@ Si una fila se mueve a la izquierda, regresa la prueba al tipo.
 
 | Concepto | Defensive Rust | Type-Driven Rust | Beneficio |
 |---|---|---|---|
-| Parseo de borde | `if` repetidos en cada funcion sobre `String` crudo | `Email::parse(String)` retorna `Result<Email, EmailError>` una vez | Una sola fuente de verdad, cero rechequeos en el core |
+| Parseo de borde | `if` repetidos en cada funcion sobre `String` crudo | `Email::parse(&str)` retorna `Result<Email, EmailError>` una vez, aloca solo en `Ok` | Una sola fuente de verdad, cero rechequeos en el core |
 | Newtypes | Alias de `String` forjables en cualquier lado | `pub struct Email(String)` con campo privado, inforjable fuera de `mod` | Imposibilidad fisica de construccion invalida |
 | Totalidad | Division e indexado que hacen panic en bordes | `Cents(u64)` mas `Result` fuerza manejo de cero y negativos | Edge cases como obligacion de compilacion |
 | Composicion | Piramides de `if` con `return Err` en cada nivel | `and_then`, `map`, `map_err` y `?` sobre el railway de `Result` | Happy path lineal con riel de error tipado |
 | Errores de dominio | `Result<T, String>` facil de tragar o mal clasificar | Enum exhaustivo con `thiserror`, `match` cubre cada variante | Nuevos casos de negocio rompen el build de forma ruidosa |
 | Errores de edge | Un solo tipo catch-all hasta `main` | `anyhow` con `.context()` solo en `main` y binarios | Contexto rico donde humanos leen logs, tipos precisos donde el codigo ramifica |
-| Estado de workflow | Flags como `is_paid` con `if` antes de cada accion | Type-state `Order<Draft>` a `Order<Paid>` con move semantics | Transiciones ilegales no compilan, handles rancios se destruyen |
+| Estado de workflow | Flags como `is_paid` con `if` antes de cada accion | Type-state `StagedOrder<Draft>` a `StagedOrder<Paid>` con move semantics | Transiciones ilegales no compilan, handles rancios se destruyen |
 | Costo en hot path | Newtypes `String` clonados en cada capa | `EmailRef<'a>` prestado sin heap, promote a owned una vez | Prueba sin impuesto de performance |
 | Testing | `#[test]` hechos a mano con pocos literales | `proptest` con miles de inputs Unicode mas shrinking | Confianza matematica en parsers, reproductores minimos |
-| Arquitectura | Handlers mezclan Serde, DB y reglas con `async` en todos lados | Core puro sync con `calculate_refund` mas shell Axum y Serde delgado | Core testeable y portable, efectos aislados y auditables |
+| Arquitectura | Handlers mezclan Serde, DB y reglas con `async` en todos lados | Core puro sync con `calculate_refund` mas shell Axum y Serde delgado tras puerto `OrderRepository` | Core testeable y portable, efectos aislados y auditables |
 
 ## 11. Reglas de oro y bibliografia
 

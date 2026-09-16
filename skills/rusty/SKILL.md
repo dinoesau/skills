@@ -10,7 +10,7 @@ description: >
 license: MIT
 allowed-tools: Bash
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # Rusty - Modelado de dominio funcional en Rust
@@ -65,7 +65,7 @@ Plantilla estricta (baja libertad, seguir literal):
 pub struct Email(String);
 
 impl Email {
-    pub fn parse(raw: String) -> Result<Self, EmailError> {
+    pub fn parse(raw: &str) -> Result<Self, EmailError> {
         // Parsear aqui una sola vez.
         // Retornar Ok(Self(valor_normalizado)).
     }

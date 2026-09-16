@@ -40,6 +40,18 @@ Esperado:
 - [ ] Rehidratacion desde DB usa red runtime minima (`rehydrate_paid` con `Result`).
 - [ ] Sin `model_validate` repetido: el value object viaja probado por referencia.
 
+## Escenario 4: sincronia post-#16/#20/#13 (payments, status, ports)
+
+Entrada: `last_four: str`, `domain_to_status -> int`, handler con snapshot inline.
+
+Esperado:
+
+- [ ] `LastFour` / `Iban` frozen con `parse_last_four` (`fullmatch [0-9]{4}`) / `parse_iban` (15-32, `^[A-Z]{2}[0-9A-Z]+$` IGNORECASE). `Card` / `Transfer` con `kw_only=True` sin defaults. PoC `mypy --strict` (`Card(last_four="12")` falla `[arg-type]`) + matriz runtime.
+- [ ] `HttpStatus = Literal[400, 404, 422, 500]` en `domain_to_status`, `app_to_status`, `report_app_error`. PoC `= 999` falla `[assignment]`; cubrir las 8-10 variantes.
+- [ ] `parse_refund_request` con `InvalidUser(detail)` e `InvalidRequest(detail)`, `Err([InvalidRequest(...)])` para shape. PoC `mypy --strict` de la cadena parsers a mensajes a status.
+- [ ] Handler con puerto `Protocol` + `Depends` + fake in-memory, `OrderId.parse -> InvalidOrderId` 400, `None -> UserNotFound` 404, una sola anotacion `err`. `Slug` con `SLUG_PATTERN` compartido, `cast` con comentario de invarianza, `_mint_after_check` privado, narrowing-`assert` solo tras chequeo exhaustivo.
+- [ ] Prosa de exhaustividad acredita `assert_never`, no `match` sin wildcard. Verificacion: extraer bloques y pasar `mypy --strict`, diff contra posts post-#17/#19.
+
 ## Prueba de disparo
 
 Debe activarse con: "quita las validaciones repetidas en este handler Python",

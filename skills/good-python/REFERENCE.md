@@ -185,6 +185,14 @@ class InvalidUserId:
     detail: str
 
 @dataclass(frozen=True, slots=True)
+class InvalidUser:
+    detail: InvalidUserId
+
+@dataclass(frozen=True, slots=True)
+class InvalidRequest:
+    detail: str
+
+@dataclass(frozen=True, slots=True)
 class InvalidCents:
     detail: str
 
@@ -231,14 +239,15 @@ def parse_refund_request(data: object) -> Result[TrustedRefund, list[DomainError
     try:
         raw = _RefundInput.model_validate(data)
     except ValidationError:
-        return Err([InvalidAmount(detail="invalid request")])
+        # Nunca retornes exc.errors(): expone internos. Shape es InvalidRequest.
+        return Err([InvalidRequest(detail="invalid request")])
     user_id = UserId.parse(raw.user_id)
     amount = Cents.parse(raw.amount_cents)
     errors: list[DomainError] = []
     if isinstance(user_id, Err):
-        errors.append(user_id.error)
+        errors.append(InvalidUser(detail=user_id.error))
     if isinstance(amount, Err):
-        errors.append(InvalidAmount(detail="invalid amount"))
+        errors.append(InvalidAmount(detail=amount.error))
     if errors:
         return Err(errors)
     assert isinstance(user_id, Ok) and isinstance(amount, Ok)
@@ -256,15 +265,52 @@ Las uniones y dataclasses frozen de Python son ADTs. `Result` es tu `Either`.
 Sum types enumeran alternativas exclusivas.
 
 ```python
-@dataclass(frozen=True, slots=True)
-class Card:
-    kind: Literal["card"] = "card"
-    last_four: str  # Sin default "": el llamador entrega valor ya validado.
+from typing import Literal
 
 @dataclass(frozen=True, slots=True)
+class LastFour:
+    """Four-digit card suffix. Solo via parse_last_four."""
+    _value: str
+
+@dataclass(frozen=True, slots=True)
+class InvalidLastFour:
+    received: str
+
+def parse_last_four(raw: object) -> Result[LastFour, InvalidLastFour]:
+    import re
+    if not isinstance(raw, str) or re.fullmatch(r"[0-9]{4}", raw) is None:
+        return Err(InvalidLastFour(received=str(raw)))
+    return Ok(LastFour(_value=raw))
+
+@dataclass(frozen=True, slots=True)
+class Iban:
+    """Bank account identifier. Solo via parse_iban."""
+    _value: str
+
+@dataclass(frozen=True, slots=True)
+class InvalidIban:
+    received: str
+
+def parse_iban(raw: object) -> Result[Iban, InvalidIban]:
+    import re
+    if (
+        not isinstance(raw, str)
+        or len(raw) < 15
+        or len(raw) > 32
+        or re.fullmatch(r"[A-Z]{2}[0-9A-Z]+", raw, re.IGNORECASE) is None
+    ):
+        return Err(InvalidIban(received=str(raw)))
+    return Ok(Iban(_value=raw))
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Card:
+    kind: Literal["card"] = "card"
+    last_four: LastFour
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Transfer:
     kind: Literal["transfer"] = "transfer"
-    iban: str  # Sin default "": sin objetos a medio construir.
+    iban: Iban
 
 @dataclass(frozen=True, slots=True)
 class Cash:
@@ -305,7 +351,7 @@ def fee_for(method: PaymentMethod) -> int:
             return assert_never(method)
 ```
 
-Agrega `Crypto` y `fee_for` falla el chequeo hasta manejarlo. Con `mypy --strict`, un `match` sin wildcard sobre una union se marca. Esa ruptura es la funcionalidad.
+Agrega `Crypto` y `fee_for` falla el chequeo hasta manejarlo. Con `mypy --strict`, la ruptura la da `case _: return assert_never(method)`: el resto estrechado ya no es `Never` cuando falta un brazo. Un `match` sin wildcard sobre una union pasa limpio bajo `strict`, no acredita exhaustividad. Esa ruptura es la funcionalidad.
 
 Una funcion total esta definida para el 100 por ciento de sus inputs. Nunca lanza por casos esperados, nunca retorna `None` por sorpresa.
 
@@ -367,10 +413,10 @@ def build_order_clean(raw_email: object, raw_amount: object, raw_user_id: object
         return Err(InvalidEmail(detail=email.error))
     amount = Cents.parse(raw_amount)
     if isinstance(amount, Err):
-        return Err(InvalidAmount(detail="invalid amount"))
+        return Err(InvalidAmount(detail=amount.error))
     user = UserId.parse(raw_user_id)
     if isinstance(user, Err):
-        return Err(user.error)
+        return Err(InvalidUser(detail=user.error))
     assert isinstance(email, Ok) and isinstance(amount, Ok) and isinstance(user, Ok)
     return Ok(OrderShape(user_id=user.value, email=email.value, amount=amount.value, method=Cash()))
 ```
@@ -472,6 +518,22 @@ Estratifica en tres capas: core expone dominio, app envuelve infra una vez, edge
 
 ```python
 @dataclass(frozen=True, slots=True)
+class OrderId:
+    """Branded order id. Solo via OrderId.parse."""
+    _value: str
+
+    @classmethod
+    def parse(cls, raw: object) -> Result["OrderId", InvalidOrderId]:
+        if not isinstance(raw, str) or not raw.strip():
+            return Err(InvalidOrderId(detail="order id must be a non-empty string"))
+        if len(raw) > 64:
+            return Err(InvalidOrderId(detail="order id too long"))
+        return Ok(cls(_value=raw.strip()))
+
+    def __str__(self) -> str:
+        return self._value
+
+@dataclass(frozen=True, slots=True)
 class InvalidEmail:
     detail: EmailError
 
@@ -489,6 +551,14 @@ class InvalidStage:
     detail: str
 
 @dataclass(frozen=True, slots=True)
+class InvalidRequest:
+    detail: str
+
+@dataclass(frozen=True, slots=True)
+class InvalidUser:
+    detail: InvalidUserId
+
+@dataclass(frozen=True, slots=True)
 class ExceedsMax:
     max_cents: int
 
@@ -503,45 +573,56 @@ class InsufficientFunds:
 
 @dataclass(frozen=True, slots=True)
 class AlreadyRefunded:
-    order_id: str
+    order_id: OrderId
 
-type DomainError = InvalidEmail | InvalidAmount | InvalidOrderId | InvalidStage | ExceedsMax | UserNotFound | InsufficientFunds | AlreadyRefunded
+type DomainError = InvalidEmail | InvalidAmount | InvalidOrderId | InvalidStage | InvalidRequest | InvalidUser | ExceedsMax | UserNotFound | InsufficientFunds | AlreadyRefunded
 ```
 
 El `match` exhaustivo fuerza decisiones de producto.
 
 ```python
-def domain_to_status(error: DomainError) -> int:
+from typing import Literal
+
+type HttpStatus = Literal[400, 404, 422, 500]
+
+def domain_to_status(error: DomainError) -> HttpStatus:
     match error:
-        case InvalidEmail() | InvalidAmount() | InvalidOrderId() | InvalidStage():
+        case InvalidEmail() | InvalidAmount() | InvalidUser():
             return 400
         case UserNotFound():
             return 404
-        case ExceedsMax() | InsufficientFunds() | AlreadyRefunded():
+        case InvalidOrderId() | InvalidStage() | InvalidRequest():
+            return 400
+        case InsufficientFunds() | AlreadyRefunded() | ExceedsMax():
             return 422
-        case _:
-            return assert_never(error)
+    # Sin wildcard: agregar una variante de DomainError debe romper el chequeo (missing return).
 
 def domain_to_message(error: DomainError) -> str:
     match error:
         case InvalidEmail(detail=detail):
             return f"invalid email: {type(detail).__name__}"
+        case InvalidUser(detail=detail):
+            return f"invalid user: {detail.detail}"
         case InvalidAmount(detail=detail):
-            return f"invalid amount: {detail}"
-        case InvalidOrderId():
-            return "invalid order id"
-        case InvalidStage():
-            return "invalid stage"
-        case ExceedsMax():
-            return "amount exceeds policy maximum"
+            detail_str = detail.detail if isinstance(detail, InvalidCents) else detail
+            return f"invalid amount: {detail_str}"
         case UserNotFound():
             return "user not found"
         case InsufficientFunds(requested=requested, balance=balance):
             return f"insufficient funds: requested {requested}, balance {balance}"
-        case AlreadyRefunded():
+        case AlreadyRefunded(order_id=_order_id):
             return "refund already processed"
-        case _:
-            return assert_never(error)
+        case InvalidOrderId(detail=detail):
+            return f"invalid order id: {detail}"
+        case InvalidStage(detail=detail):
+            return f"invalid stage: {detail}"
+        case InvalidRequest(detail=detail):
+            return f"invalid request: {detail}"
+        case ExceedsMax(max_cents=max_cents):
+            return f"amount exceeds maximum {max_cents}"
+    # Sin wildcard: agregar una variante debe fallar el chequeo (missing return).
+    # NOTA: InvalidAmount lleva InvalidCents | str en migracion.
+    # Codigo nuevo debe pasar InvalidCents para matcheo simetrico con InvalidEmail.
 ```
 
 Envuelve infraestructura una vez en la capa de aplicacion con causa explicita.
@@ -559,11 +640,11 @@ class GatewayError:
 
 type AppError = DomainError | DbError | GatewayError
 
-def app_to_status(error: AppError) -> int:
+def app_to_status(error: AppError) -> HttpStatus:
     match error:
         case DbError() | GatewayError():
             return 500
-        case InvalidEmail() | InvalidAmount() | InvalidOrderId() | InvalidStage() | ExceedsMax() | UserNotFound() | InsufficientFunds() | AlreadyRefunded():
+        case InvalidEmail() | InvalidAmount() | InvalidOrderId() | InvalidStage() | InvalidRequest() | InvalidUser() | ExceedsMax() | UserNotFound() | InsufficientFunds() | AlreadyRefunded():
             return domain_to_status(error)
         case _:
             return assert_never(error)
@@ -575,12 +656,12 @@ Agrega contexto y logs solo en el edge, donde humanos leen.
 import logging
 logger = logging.getLogger(__name__)
 
-def report_app_error(error: AppError) -> tuple[int, dict[str, str]]:
+def report_app_error(error: AppError) -> tuple[HttpStatus, dict[str, str]]:
     match error:
         case DbError(cause=cause) | GatewayError(cause=cause):
             logger.error("infrastructure failure", extra={"kind": type(error).__name__, "cause": str(cause)})
             return 500, {"error": "internal error"}
-        case InvalidEmail() | InvalidAmount() | InvalidOrderId() | InvalidStage() | ExceedsMax() | UserNotFound() | InsufficientFunds() | AlreadyRefunded():
+        case InvalidEmail() | InvalidAmount() | InvalidOrderId() | InvalidStage() | InvalidRequest() | InvalidUser() | ExceedsMax() | UserNotFound() | InsufficientFunds() | AlreadyRefunded():
             return domain_to_status(error), {"error": domain_to_message(error)}
         case _:
             return assert_never(error)
@@ -756,19 +837,20 @@ class RefundPolicy:
 
 @dataclass(frozen=True, slots=True)
 class Refund:
-    order_id: str
+    order_id: OrderId
     amount: Cents
 
 @dataclass(frozen=True, slots=True)
 class OrderSnapshot:
-    order_id: str
+    order_id: OrderId
+    email: Email
     balance: Cents
     already_refunded: bool
 
 def calculate_refund(
     order: OrderSnapshot, requested: Cents, policy: RefundPolicy,
 ) -> Result[Refund, DomainError]:
-    # Pura: todos los inputs ya son tipos probados.
+    # Pura: balance y politica ya son Cents probados, email viaja tipado.
     if order.already_refunded:
         return Err(AlreadyRefunded(order_id=order.order_id))
     if requested.to_int() > order.balance.to_int():
@@ -788,16 +870,68 @@ class RefundRequestDto(BaseModel):
     amount_cents: int
 ```
 
-El handler FastAPI une los dos mundos y nada mas.
+El handler FastAPI une los dos mundos y nada mas. Desacoplalo con puerto `Protocol` en la capa app: solo habla tipos de dominio. El shell provee el adapter y FastAPI lo inyecta con `Depends`.
 
 ```python
-# shell/handlers.py
+# app/ports.py: puerto hexagonal, solo tipos de dominio.
+from typing import Protocol
+
+class OrderRepository(Protocol):
+    async def find(self, order_id: OrderId) -> Result[OrderSnapshot | None, DbError]: ...
+```
+
+```python
+# shell/postgres_repo.py: un adapter tras el puerto.
+# Filas SQL re-entran al dominio via OrderId.parse, parse_email y Cents.parse.
+class PostgresOrderRepository:
+    def __init__(self, pool: object) -> None:
+        self._pool = pool
+
+    async def find(self, order_id: OrderId) -> Result[OrderSnapshot | None, DbError]:
+        try:
+            _ = (order_id, self._pool)
+            return Ok(None)
+        except Exception as exc:
+            return Err(DbError(cause=exc))
+
+# tests/fakes.py: fake para tests y dev.
+class InMemoryOrderRepository:
+    def __init__(self) -> None:
+        self._orders: dict[str, OrderSnapshot] = {}
+
+    def seed(self, order: OrderSnapshot) -> None:
+        self._orders[str(order.order_id)] = order
+
+    async def find(self, order_id: OrderId) -> Result[OrderSnapshot | None, DbError]:
+        return Ok(self._orders.get(str(order_id)))
+```
+
+```python
+# shell/handlers.py: shell delgado alrededor del core puro.
+from typing import Annotated
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import JSONResponse
+from pydantic import ValidationError
+
 shell_app = FastAPI()
 
-@shell_app.post("/refund")
-async def refund_handler(payload: object) -> JSONResponse:
-    # 1. Parsear en el borde: JSON desconocido se vuelve marcas probadas.
-    # Nota: Request manual pierde docs OpenAPI 422 automaticas; usa param DTO para docs.
+def get_order_repository() -> OrderRepository:
+    # Cableado una vez en startup al adapter Postgres.
+    # Tests override con dependency_overrides y el fake in-memory.
+    raise NotImplementedError
+
+@shell_app.post("/refund", response_model=None)
+async def refund_handler(
+    request: Request,
+    repo: Annotated[OrderRepository, Depends(get_order_repository)],
+) -> JSONResponse:
+    # Request manual pierde docs OpenAPI 422 automaticas; usa param DTO para docs.
+    # Usa esta forma solo para mostrar el borde explicito.
+    try:
+        payload: object = await request.json()
+    except Exception:
+        # JSONDecodeError y errores de lectura.
+        return JSONResponse({"error": "invalid request"}, status_code=400)
     try:
         shaped = RefundRequestDto.model_validate(payload)
     except ValidationError:
@@ -808,17 +942,27 @@ async def refund_handler(payload: object) -> JSONResponse:
         return JSONResponse({"error": domain_to_message(err)}, status_code=domain_to_status(err))
     amount = Cents.parse(shaped.amount_cents)
     if isinstance(amount, Err):
-        err = InvalidAmount(detail="invalid amount")
+        err = InvalidAmount(detail=amount.error)
         return JSONResponse({"error": domain_to_message(err)}, status_code=domain_to_status(err))
-    order_id = UserId.parse(shaped.order_id)
+    order_id = OrderId.parse(shaped.order_id)
     if isinstance(order_id, Err):
-        err = InvalidOrderId(detail="invalid order id")
+        err = InvalidOrderId(detail=order_id.error.detail)
         return JSONResponse({"error": domain_to_message(err)}, status_code=domain_to_status(err))
-    # 2. Rehidratar estado minimo, llamar al core puro. El shell nunca mintea directo.
-    # Nunca loguees email crudo: usa request_id/order_id. Prod exige Idempotency-Key, metricas refund_total y core sync fuera del loop.
-    assert isinstance(email, Ok) and isinstance(amount, Ok) and isinstance(order_id, Ok)
-    order = OrderSnapshot(order_id=shaped.order_id, balance=Cents._mint_after_check(10_000), already_refunded=False)
-    refund = calculate_refund(order, amount.value, RefundPolicy(max_cents=Cents._mint_after_check(500_000)))
+    # 2. Cargar estado persistido via puerto. Nunca fabricar Order desde el monto del request.
+    loaded = await repo.find(order_id.value)
+    if isinstance(loaded, Err):
+        return JSONResponse(
+            {"error": "internal error"},
+            status_code=app_to_status(loaded.error),
+        )
+    if loaded.value is None:
+        err = UserNotFound(user_id=shaped.order_id)
+        return JSONResponse({"error": domain_to_message(err)}, status_code=domain_to_status(err))
+    order = loaded.value
+    cap = Cents.parse(500_000)
+    assert isinstance(cap, Ok)
+    policy = RefundPolicy(max_cents=cap.value)
+    refund = calculate_refund(order, amount.value, policy)
     if isinstance(refund, Err):
         return JSONResponse(
             {"error": domain_to_message(refund.error)},
@@ -826,7 +970,7 @@ async def refund_handler(payload: object) -> JSONResponse:
         )
     # 3. Mapear a transporte. Sin logica aqui.
     return JSONResponse(
-        {"orderId": refund.value.order_id, "refundedCents": refund.value.amount.to_int()},
+        {"orderId": str(refund.value.order_id), "refundedCents": refund.value.amount.to_int()},
         status_code=200,
     )
 ```

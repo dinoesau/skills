@@ -145,3 +145,48 @@ export function chargeOnce(rawAmount: unknown): void {
   applyCharge(parsed.value);
 }
 ```
+
+## 8. Payload stringly vs brands `LastFour` / `Iban`
+
+Before: cualquier string pasa como metodo de pago.
+After: solo valores parseados llegan al core.
+
+```ts
+// Before: stringly, `"12"` compila.
+export type PaymentMethodOld =
+  | { readonly kind: "card"; readonly lastFour: string }
+  | { readonly kind: "transfer"; readonly iban: string }
+  | { readonly kind: "cash" };
+
+// After: `parseLastFour("12")` retorna Err, `parseLastFour("4242")` retorna Ok.
+// `parseIban` exige 15-32 + `/^[A-Z]{2}[0-9A-Z]+$/i`.
+export function payWith(method: PaymentMethod): number {
+  return feeFor(method); // exhaustivo via assertNever
+}
+```
+
+## 9. Status `number` vs `HttpStatus` cerrado
+
+Before: `domainToStatus` retorna `number`, `return 999` compila.
+After: tabla unica `HttpStatus = 400 | 404 | 422 | 500`, `return 999` falla en `tsc --strict`.
+
+```ts
+// After: importar de `domain/status.ts`, sin casts `as` en el handler.
+import { domainToStatus, type HttpStatus } from "./domain/status.js";
+export function statusFor(e: DomainError): HttpStatus {
+  return domainToStatus(e);
+}
+```
+
+## 10. Snapshot inline vs puerto `OrderRepository`
+
+Before: handler fabrica `{ balance: mintCentsUnchecked(10_000) }` inline.
+After: carga via puerto, `null` es `UserNotFound` 404 y `throw` es `Database` 500.
+
+```ts
+// After: factory con adapters Postgres e in-memory.
+export function createRefundHandler(deps: AppDeps): Hono {
+  void deps; // repo + policy inyectados, core puro sin cambios
+  throw new Error("ver REFERENCE.md#9-arquitectura-functional-core-imperative-shell");
+}
+```
