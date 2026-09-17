@@ -40,6 +40,17 @@ Esperado:
 - [ ] Sin `safeParse` repetido: el brand viaja probado por referencia.
 - [ ] Adversarial: JSON malformado 400 generico sin filtrar `error.message`, email malo 400, monto negativo 400, `orderId` malformado `InvalidOrderId` 400 vs fila faltante `UserNotFound` 404, doble refund `AlreadyRefunded` 422, exceso de politica `ExceedsMax` 422.
 
+## Escenario 4: sincronia post-#15/#13 (payments, status, ports)
+
+Entrada: `PaymentMethod` con `lastFour: string`, `domainToStatus: number`, handler con snapshot inline.
+
+Esperado:
+
+- [ ] `LastFour` / `Iban` como brands en `brand.ts` con `parseLastFour` (`/^[0-9]{4}$/`) y `parseIban` (15-32, `/^[A-Z]{2}[0-9A-Z]+$/i`). PoC `"12"` ya no compila como `LastFour`.
+- [ ] `ok<const T>` / `err<const E>` con nota TS 5.0+. PoC literal preservado pasa `tsc --strict` 5.5 + 7.x.
+- [ ] `HttpStatus = 400 | 404 | 422 | 500` en `domain/status.ts` como tabla unica. `domainToStatus`, `appToStatus`, `ErrorReport.status: HttpStatus`. PoC `return 999` falla. Sin casts `as` en handler. Sin `makeStringBrand` ni `EmailParser` en el repo.
+- [ ] Puerto `OrderRepository` con `find(orderId): Promise<Result<OrderSnapshot, AppError>>`, adapters Postgres e in-memory, handler via factory. `null` mapea a `UserNotFound` 404 y `throw` a `Database` 500. Verificacion: extraer bloques y pasar `tsc --strict`, diff contra `content/en|es/post/*-stop-validating-everywhere/index.md` post-#17/#19.
+
 ## Prueba de disparo
 
 Debe activarse con: "quita las validaciones repetidas en este handler TypeScript",

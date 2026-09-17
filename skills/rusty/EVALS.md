@@ -36,9 +36,20 @@ Entrada: flags `is_submitted` e `is_paid` revisados con `if` antes de cada accio
 
 Esperado:
 
-- [ ] Estados `Order<Draft>` a `Order<Paid>` con transiciones que mueven `self`.
+- [ ] Estados `StagedOrder<Draft>` a `StagedOrder<Paid>` con transiciones que mueven `self`.
 - [ ] Reusar un valor viejo no compila.
 - [ ] Metodos por estado solo existen en el estado correcto (`receipt` solo en `Paid`).
+
+## Escenario 4: sincronia post-#13/#19 (payments, status, ports)
+
+Entrada: `pub last_four: String`, `refund_status_code -> u16`, handler con `Order` inline.
+
+Esperado:
+
+- [ ] `CardDetails` / `TransferDetails` con campos privados + `parse` por struct y enums `LastFourError` / `IbanError` con `Display` manual + `Error` estilo `MoneyError`. PoC `cargo check` (verbatim compila con campos publicos) + `E0308` contra `&str` cuando el campo es privado.
+- [ ] Regla IBAN 15-34 chars, prefijo dos letras, alfanumerico ASCII, conteo por chars, mensaje actualizado, mas `as_str()`. PoC `cargo test` con matriz de bounds (8/8): `"DE12"`, `"X"`, `-`/`!`/espacios rechazan.
+- [ ] `refund_status_code -> StatusCode` como mapeo unico usado por `IntoResponse`. Trait `OrderRepository` + `Arc<dyn>` via `State` + adapters sqlx/in-memory. `None -> UserNotFound` 404, `Err -> Database` 500. PoC `cargo check` + `clippy -D warnings`.
+- [ ] Verificacion: extraer bloques y pasar `cargo check` + `clippy -D warnings`, diff contra `content/en|es/post/*-stop-validating-everywhere/index.md` post-#17/#19.
 
 ## Prueba de disparo
 

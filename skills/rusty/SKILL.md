@@ -65,7 +65,7 @@ Plantilla estricta (baja libertad, seguir literal):
 pub struct Email(String);
 
 impl Email {
-    pub fn parse(raw: String) -> Result<Self, EmailError> {
+    pub fn parse(raw: &str) -> Result<Self, EmailError> {
         // Parsear aqui una sola vez.
         // Retornar Ok(Self(valor_normalizado)).
     }

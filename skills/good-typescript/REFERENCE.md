@@ -128,7 +128,10 @@ Base zero-runtime: solo existe en el checker, emite cero JavaScript.
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 export type Email = Brand<string, "Email">;
 export type UserId = Brand<string, "UserId">;
+export type OrderId = Brand<string, "OrderId">;
 export type Cents = Brand<number, "Cents">;
+export type LastFour = Brand<string, "LastFour">;
+export type Iban = Brand<string, "Iban">;
 ```
 
 Cada brand es un literal distinto, asi `Email` no es asignable a `UserId` aunque ambos envuelvan `string`.
@@ -245,11 +248,27 @@ Las uniones e interfaces de TypeScript son ADTs. `Result` discriminado es tu mon
 Sum types enumeran alternativas exclusivas.
 
 ```ts
-// domain/payment.ts
+// domain/payment.ts: suma con payloads brandeados, nunca stringly.
+import type { Iban, LastFour } from "./brand.js";
+import type { Result } from "./result.js";
 export type PaymentMethod =
-  | { readonly kind: "card"; readonly lastFour: string }
-  | { readonly kind: "transfer"; readonly iban: string }
+  | { readonly kind: "card"; readonly lastFour: LastFour }
+  | { readonly kind: "transfer"; readonly iban: Iban }
   | { readonly kind: "cash" };
+export type LastFourError = { readonly kind: "InvalidLastFour"; readonly received: string };
+export type IbanError = { readonly kind: "InvalidIban"; readonly received: string };
+export function parseLastFour(raw: unknown): Result<LastFour, LastFourError> {
+  if (typeof raw !== "string" || !/^[0-9]{4}$/.test(raw)) {
+    return { ok: false, error: { kind: "InvalidLastFour", received: String(raw) } };
+  }
+  return { ok: true, value: raw as LastFour };
+}
+export function parseIban(raw: unknown): Result<Iban, IbanError> {
+  if (typeof raw !== "string" || raw.length < 15 || raw.length > 32 || !/^[A-Z]{2}[0-9A-Z]+$/i.test(raw)) {
+    return { ok: false, error: { kind: "InvalidIban", received: String(raw) } };
+  }
+  return { ok: true, value: raw as Iban };
+}
 ```
 
 Product types combinan hechos independientes.
@@ -312,10 +331,12 @@ Composicion con `map`, `andThen` y `mapErr` en vez de piramides. Esto es Railway
 export type Result<T, E> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: E };
-export function ok<T>(value: T): Result<T, never> {
+// Requiere TS 5.0+ por `const` type param. Preserva literales sin ensanchar.
+// Probado con `tsc --strict` 5.5 + 7.x. El post asume 5.x `strict` + `noUncheckedIndexedAccess`.
+export function ok<const T>(value: T): Result<T, never> {
   return { ok: true, value };
 }
-export function err<E>(error: E): Result<never, E> {
+export function err<const E>(error: E): Result<never, E> {
   return { ok: false, error };
 }
 export function map<T, U, E>(result: Result<T, E>, fn: (value: T) => U): Result<U, E> {
@@ -406,17 +427,9 @@ const policy = { maxCents: 500_000, currency: "USD" } as const satisfies {
 Mecaniza repeticion con helpers pequenos, nunca con logica de negocio escondida.
 
 ```ts
-export function makeStringBrand<Name extends string>(name: Name, schema: z.ZodString) {
-  return {
-    schema: schema.transform((value) => value as Brand<string, Name>),
-    parse(raw: unknown): Result<Brand<string, Name>, { readonly kind: string; readonly name: Name }> {
-      const parsed = schema.safeParse(raw);
-      if (!parsed.success) return { ok: false, error: { kind: "invalid", name } };
-      return { ok: true, value: parsed.data as Brand<string, Name> };
-    },
-  };
-}
-export const EmailParser = makeStringBrand("Email", z.string().trim().min(3));
+// ❌ helpers/smart.ts: borrado. La factory generica ensancha el error a `{ readonly kind: string }`.
+// Ningun caller puede matchearla exhaustivamente (`assertNever` inalcanzable).
+// Usa un smart constructor por tipo con union cerrada: ver `parseEmail` en `domain/email.ts` y `parseCents` en `domain/money.ts`.
 ```
 
 Regla de helpers: pueden quitar boilerplate de `safeParse`, `trim` y `transform`, pero el invariante queda visible en el modulo de dominio. Si el revisor no ve la regla del email sin abrir el helper, la abstraccion fue demasiado lejos.
@@ -444,7 +457,12 @@ export type DomainError =
 El `switch` exhaustivo fuerza decisiones de producto.
 
 ```ts
-export function domainToStatus(error: DomainError): number {
+// domain/status.ts: tabla unica, importada por shell y app. Sin duplicar ni castear.
+// PoC: `return 999` debe fallar en `tsc --strict`.
+import { assertNever } from "./assert.js";
+import type { DomainError } from "./errors.js";
+export type HttpStatus = 400 | 404 | 422 | 500;
+export function domainToStatus(error: DomainError): HttpStatus {
   switch (error.kind) {
     case "InvalidEmail":
     case "InvalidAmount":
@@ -474,12 +492,14 @@ Envuelve infraestructura una vez en la capa de aplicacion con `cause` explicito.
 
 ```ts
 // app/errors.ts
+// App importa status desde dominio, nunca desde shell. Tabla unica, sin duplicar.
+import { domainToStatus, type HttpStatus } from "../domain/status.js";
 export type AppError =
   | { readonly kind: "Domain"; readonly error: DomainError }
   | { readonly kind: "Database"; readonly cause: unknown }
   | { readonly kind: "Gateway"; readonly cause: unknown };
 
-export function appToStatus(error: AppError): number {
+export function appToStatus(error: AppError): HttpStatus {
   if (error.kind === "Domain") return domainToStatus(error.error);
   return 500;
 }
@@ -489,9 +509,16 @@ export function appToStatus(error: AppError): number {
 Agrega contexto y logs solo en el edge, donde humanos leen.
 
 ```ts
+// shell/handler-helpers.ts: edge-only enrichment.
+import type { AppError } from "../app/errors.js";
+import { domainToMessage, domainToStatus, type HttpStatus } from "../domain/status.js";
+export interface ErrorReport {
+  readonly status: HttpStatus;
+  readonly body: { readonly error: string };
+}
 export function reportAppError(
   error: AppError, logger: { error: (message: string, details?: unknown) => void },
-): { readonly status: number; readonly body: { readonly error: string } } {
+): ErrorReport {
   if (error.kind === "Domain") {
     return { status: domainToStatus(error.error), body: { error: domainToMessage(error.error) } };
   }
@@ -637,10 +664,11 @@ export function calculateRefund(
   if (order.alreadyRefunded) {
     return { ok: false, error: { kind: "AlreadyRefunded", orderId: order.orderId } };
   }
-  if ((requested as number) > (order.balance as number)) {
+  // Brands numericos comparan sin cast. Sin `as` en el handler.
+  if (requested > order.balance) {
     return { ok: false, error: { kind: "InsufficientFunds", requested, balance: order.balance } };
   }
-  if ((requested as number) > (policy.maxCents as number)) {
+  if (requested > policy.maxCents) {
     return { ok: false, error: { kind: "ExceedsMax", max: policy.maxCents } };
   }
   return { ok: true, value: { orderId: order.orderId, amount: requested } };
@@ -658,10 +686,11 @@ export const RefundRequestDto = z.object({
 });
 ```
 
-El handler Hono une los dos mundos y nada mas.
+<El handler Hono une los dos mundos y nada mas.
 Desacopla la infra con un puerto interfaz en la capa app.
 El puerto solo habla tipos de dominio.
 El shell provee el adaptador y el handler lo recibe via factory.
+Los lookups retornan `Result`, nunca `null`: fila faltante es error `Domain` que el shell mapea a 404, outage es `Database` a 500.
 En Fastify reemplaza `c.req.json()` por `request.body` y `c.json()` por `reply.code().send()`.
 El core no cambia porque nunca importo el framework.
 La API de `calculateRefund` no cambia.
@@ -670,16 +699,99 @@ La API de `calculateRefund` no cambia.
 // app/ports.ts: puerto hexagonal, solo tipos de dominio.
 import type { OrderId } from "../domain/brand.js";
 import type { OrderSnapshot, RefundPolicy } from "../core/refunds.js";
+import type { Result } from "../domain/result.js";
+import type { AppError } from "./errors.js";
 
+// Canonico: `Result` distingue miss de dominio vs outage de infra sin `null`.
 export interface OrderRepository {
-  find(orderId: OrderId): Promise<OrderSnapshot | null>;
+  find(orderId: OrderId): Promise<Result<OrderSnapshot, AppError>>;
 }
 
+// Variante simple para codebases pequenos: `Promise<OrderSnapshot | null>`.
+// `null` mapea a `UserNotFound` 404 y `throw` mapea a `Database` 500.
+// Preserva la misma factory y los mismos adaptadores.
 export interface AppDeps {
   readonly repo: OrderRepository;
   readonly policy: RefundPolicy;
 }
+
+```ts
+// shell/postgres-repo.ts: un adapter tras el puerto.
+// Filas SQL re-entran al dominio via parseOrderId, parseEmail y parseCents.
+import { err, ok } from "../domain/result.js";
+import type { OrderRepository } from "../app/ports.js";
+export class PostgresOrderRepository implements OrderRepository {
+  constructor(private readonly pool: { query: (sql: string, params: unknown[]) => Promise<{ rows: unknown[] }> }) {}
+  async find(orderId: OrderId) {
+    try {
+      void orderId; void this.pool;
+      // Ejemplo recortado: el miss reusa la identidad del request.
+      // Schemas reales buscan por userId y construyen UserNotFound sin casts.
+      return err({ kind: "Domain", error: { kind: "UserNotFound", userId: orderId as unknown as UserId } } as AppError);
+    } catch (cause) {
+      return err({ kind: "Database", cause } as AppError);
+    }
+  }
+}
+// shell/memory-repo.ts: fake para tests y dev.
+export class InMemoryOrderRepository implements OrderRepository {
+  private readonly orders = new Map<string, OrderSnapshot>();
+  seed(order: OrderSnapshot): void { this.orders.set(order.orderId as string, order); }
+  async find(orderId: OrderId) {
+    const found = this.orders.get(orderId as string);
+    if (!found) return err({ kind: "Domain", error: { kind: "UserNotFound", userId: orderId as unknown as UserId } } as AppError);
+    return ok(found);
+  }
+}
 ```
+
+```ts
+// shell/handlers.ts: shell delgado alrededor del core puro.
+import { Hono } from "hono";
+export function createRefundHandler(deps: AppDeps): Hono {
+  const app = new Hono();
+  app.post("/refund", async (c) => {
+    // 1. Parsear en el borde: unknown JSON se vuelve brands probados.
+    const raw: unknown = await c.req.json().catch(() => null);
+    const shaped = RefundRequestDto.safeParse(raw);
+    if (!shaped.success) {
+      // Nunca filtres zod.error.message ni input crudo: puede traer PII e internos.
+      console.warn("bad shape", { issues: shaped.error.issues.length });
+      return c.json({ error: "invalid request" }, 400);
+    }
+    const email = parseEmail(shaped.data.email);
+    if (!email.ok) {
+      const e: DomainError = { kind: "InvalidEmail", error: email.error };
+      return c.json({ error: domainToMessage(e) }, domainToStatus(e));
+    }
+    const orderId = parseOrderId(shaped.data.orderId);
+    if (!orderId.ok) {
+      // Id malformado es InvalidOrderId 400. UserNotFound 404 solo es ausencia en DB.
+      const e: AppError = { kind: "Domain", error: { kind: "InvalidOrderId" } };
+      return c.json({ error: "invalid order id" }, appToStatus(e));
+    }
+    const amount = parseCents(shaped.data.amountCents);
+    if (!amount.ok) {
+      const e: DomainError = { kind: "InvalidAmount" };
+      return c.json({ error: domainToMessage(e) }, domainToStatus(e));
+    }
+    // 2. Cargar estado persistido via puerto. Nunca fabricar Order desde el monto del request.
+    const loaded = await deps.repo.find(orderId.value);
+    if (!loaded.ok) return c.json(reportAppError(loaded.error, console).body, reportAppError(loaded.error, console).status);
+    // 3. Llamar al core puro y mapear a transporte. Sin logica aqui.
+    const refund = calculateRefund(loaded.value, amount.value, deps.policy);
+    if (!refund.ok) return c.json({ error: domainToMessage(refund.error) }, domainToStatus(refund.error));
+    return c.json({ orderId: refund.value.orderId, refundedCents: refund.value.amount }, 200);
+  });
+  return app;
+}
+// Wire una vez en startup: parsea el cap de politica una sola vez y pasa `{ repo, policy }`.
+// Tests pasan `InMemoryOrderRepository` en vez de Postgres, sin DB.
+// Prod: exige `Idempotency-Key` con dedup, emite `refund_total{kind}`, manten el core sync fuera del event loop.
+```
+
+Variante simple nullable preservada de la rama local.
+Mantiene la misma factory y el mismo mapeo 404/500 con menos tipos.
 
 ```ts
 // shell/postgres-repo.ts: un adaptador tras el puerto.
