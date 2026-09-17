@@ -51,6 +51,17 @@ Esperado:
 - [ ] `HttpStatus = 400 | 404 | 422 | 500` en `domain/status.ts` como tabla unica. `domainToStatus`, `appToStatus`, `ErrorReport.status: HttpStatus`. PoC `return 999` falla. Sin casts `as` en handler. Sin `makeStringBrand` ni `EmailParser` en el repo.
 - [ ] Puerto `OrderRepository` con `find(orderId): Promise<Result<OrderSnapshot, AppError>>`, adapters Postgres e in-memory, handler via factory. `null` mapea a `UserNotFound` 404 y `throw` a `Database` 500. Verificacion: extraer bloques y pasar `tsc --strict`, diff contra `content/en|es/post/*-stop-validating-everywhere/index.md` post-#17/#19.
 
+## Escenario 5: secretos y lints (v1.3.0)
+
+Entrada: handler que interpola `Email` en logs y usa `maybe!` en dominio/core.
+
+Esperado:
+
+- [ ] PII envuelto en clase opaca `CustomerEmail` (`#inner`, `toString`/`toJSON` redactados, `exposeForSending`); `Brand<string, "Email">` guardado para hot paths.
+- [ ] PoC `sendEmail(customer)` falla con `TS2345`; `` `sending to ${customer}` `` y `JSON.stringify(customer)` muestran `[redacted]`.
+- [ ] `eslint.config.mjs` con `no-non-null-assertion` + `no-restricted-syntax` para `TSAsExpression`; `npx tsc --noEmit`, `npx eslint . --max-warnings 0` y `npx vitest run` pasan.
+- [ ] PoC `maybe!` en dominio/core lo marca eslint; `!` solo en fixtures/tests con disables a nivel de archivo.
+
 ## Prueba de disparo
 
 Debe activarse con: "quita las validaciones repetidas en este handler TypeScript",

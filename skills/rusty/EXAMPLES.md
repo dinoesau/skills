@@ -207,3 +207,34 @@ pub struct CardDetailsOld { pub last_four: String }
 let card = CardDetails::parse("4242")?;
 let transfer = TransferDetails::parse("DE89370400440532013000")?;
 ```
+
+## 11. `Email` logueable vs `CustomerEmail` opaco
+
+Before: cada `%email` es una fuga de PII que compila.
+After: el log crudo falla con `E0277`.
+
+```rust
+// Before: compila y fuga.
+tracing::error!(email = %email, "infrastructure failure");
+
+// After: CustomerEmail no implementa Display; el log crudo no compila (E0277).
+// Solo escotillas explicitas:
+let customer = CustomerEmail::from(Email::parse("user@example.com").map_err(DomainError::InvalidEmail)?);
+tracing::info!(email = customer.redacted(), "sending receipt");
+let raw: &str = customer.expose_for_sending(); // solo en el borde de envio
+```
+
+## 12. `unwrap` por disciplina vs lints como invariantes
+
+Before: "nunca `unwrap`" exigido por review; `cargo clippy -- -D warnings` pasa con `.unwrap()` en dominio.
+After: el header lo convierte en fallo de build.
+
+```rust
+// Before: compila con -D warnings.
+let email = Email::parse(raw).unwrap();
+
+// After: con #![deny(clippy::unwrap_used)] esto falla clippy.
+// Nunca implementes Deref<Target = str>: re-expone str en silencio.
+// Version exigida:
+let email = Email::parse(raw).map_err(DomainError::InvalidEmail)?;
+```

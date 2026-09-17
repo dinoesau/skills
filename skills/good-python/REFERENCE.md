@@ -16,6 +16,7 @@ Lee solo la seccion que necesites para la tarea actual.
 - [8. Ingenieria avanzada: parse-once y Hypothesis](#8-ingenieria-avanzada-parse-once-y-hypothesis)
 - [9. Arquitectura: functional core, imperative shell](#9-arquitectura-functional-core-imperative-shell)
 - [10. Tabla defensive vs type-driven](#10-tabla-defensive-vs-type-driven)
+- [Apendice A: lints del checker como invariantes](#apendice-a-lints-del-checker-como-invariantes)
 - [11. Reglas de oro y bibliografia](#11-reglas-de-oro-y-bibliografia)
 
 ## 1. Antipatron del Python defensivo
@@ -255,6 +256,50 @@ def parse_refund_request(data: object) -> Result[TrustedRefund, list[DomainError
 ```
 
 Limite honesto: en Rust el campo privado es inforjable fisicamente. En Python cualquier modulo puede escribir `Email(_value="garbage")`. La inforjabilidad es disciplinaria. Sostenla con tres reglas: construccion directa solo dentro del modulo definidor, prohibida fuera por review y lint, y nunca re-exportes el campo crudo como API publica. Revisa cada construccion directa como un `sudo`.
+
+### Secret value objects: redaccion de PII por tipo, no por disciplina
+
+`Email.__str__` retorna la direccion cruda, asi que cada `print(f"sending to {email}")` es una fuga de PII que corre.
+La redaccion por comentario no sobrevive al proximo contribuidor.
+Envuelve PII en el borde en un tipo cuyo render por defecto es redactado.
+
+```python
+@dataclass(frozen=True, slots=True)
+class CustomerEmail:
+    """Wrapper de PII. Redactado por defecto; crudo solo via la escotilla."""
+
+    _inner: Email
+
+    def __str__(self) -> str:
+        return "[redacted]"
+
+    def __repr__(self) -> str:
+        return "CustomerEmail([redacted])"
+
+    def expose_for_sending(self) -> str:
+        return self._inner._value
+
+    def redacted(self) -> str:
+        return "[redacted]"
+```
+
+`f"{email}"` sigue mostrando la direccion cruda para contextos no-PII como recibos.
+`f"{customer}"`, `str(customer)` y `repr(customer)` muestran `[redacted]`.
+El log solo puede imprimir la forma redactada salvo que el call site pida `expose_for_sending()`.
+
+Para passwords y tokens usa el `SecretStr` de pydantic: sin dependencia nueva.
+
+```python
+from pydantic import SecretStr
+
+
+def hash_password(raw: SecretStr) -> str:
+    # str(raw) y repr(raw) muestran **********; solo esta escotilla ve el secreto.
+    return do_hash(raw.get_secret_value())
+```
+
+Guarda `Email` para validacion de forma y `CustomerEmail` para manejo de PII.
+Parsea una vez a `Email`, envuelve una vez en `CustomerEmail` y deja que el default redactado proteja el log accidental.
 
 ## 4. Pilar 2: ADTs y funciones totales
 
@@ -1013,6 +1058,33 @@ Si una fila se mueve a la izquierda, regresa la prueba al tipo.
 | Costo en hot path | `model_validate` repetido en handler, servicio y repo | Parse una vez en el edge, pasa value objects con `slots` sin revalidar | Prueba sin impuesto de performance |
 | Testing | Tests a mano con pocos literales | Hypothesis con cientos de inputs Unicode mas shrinking y `@example` | Confianza matematica en parsers, reproductores minimos |
 | Arquitectura | Handlers mezclan Pydantic, driver y reglas con `async` en todos lados | Core puro sync con `calculate_refund` mas shell FastAPI delgado con puerto `OrderRepository` (`PostgresOrderRepository` prod, `InMemoryOrderRepository` tests) | Core testeable y portable, efectos aislados y adaptador intercambiable |
+| Secretos | `Email.__str__` logueado via f-string por disciplina | `CustomerEmail` redactado por defecto mas `SecretStr` para tokens | Logs de PII como `[redacted]` salvo escotilla explicita |
+| Lints | "No construir directo" exigido por comentarios de review | `mypy --strict` mas `ruff select SLF` que marca `._value` | Disciplina como fallos del checker, backdoors de campo crudo marcados |
+
+## Apendice A: lints del checker como invariantes
+
+La regla 5 dice llevar invariantes al checker, pero type-state mas `assert_never` son los unicos invariantes verificados por maquina en esta guia.
+El invariante mas barato es un bloque concreto de lints:
+
+```toml
+[tool.mypy]
+strict = true
+
+[tool.ruff.lint]
+# SLF marca email._value fuera del modulo definidor.
+select = ["SLF"]
+```
+
+`mypy --strict` rechaza transiciones de etapa malas como `pay_order(draft)` en chequeo.
+`ruff` SLF marca acceso a `email._value` fuera del modulo definidor, justo el backdoor del que depende la construccion directa.
+
+Acota el rigor donde vive el narrowing.
+Los ejemplos de esta guia usan `assert isinstance(cap, Ok)` para estrechar `Result` tras parsear.
+Guarda esos asserts en el borde y nunca los uses para enmascarar un outcome de dominio que deberia ser `Err`.
+
+Dos reglas mas completan el bloque.
+Guarda la construccion directa dentro del modulo definidor para auditar cada mint en un solo lugar.
+Y nunca interpoles el campo crudo en logs: loguea `CustomerEmail` (redactado por defecto) solo con spans `request_id`/`order_id`.
 
 ## 11. Reglas de oro y bibliografia
 
