@@ -789,15 +789,72 @@ class RefundRequestDto(BaseModel):
 ```
 
 El handler FastAPI une los dos mundos y nada mas.
+Desacopla la infra con un puerto Protocol en la capa app.
+El puerto solo habla tipos de dominio.
+El shell provee el adaptador y FastAPI lo inyecta con `Depends`.
+La API de `calculate_refund` no cambia.
+
+```python
+# app/ports.py: puerto hexagonal, solo tipos de dominio.
+from typing import Protocol
+
+class OrderRepository(Protocol):
+    async def find(self, order_id: OrderId) -> Result[OrderSnapshot | None, DbError]:
+        ...
+```
+
+```python
+# shell/postgres_repo.py: un adaptador tras el puerto.
+# Las filas SQL re-entran al dominio via OrderId.parse, parse_email y Cents.parse.
+class PostgresOrderRepository:
+    def __init__(self, pool: object) -> None:
+        self._pool = pool
+
+    async def find(self, order_id: OrderId) -> Result[OrderSnapshot | None, DbError]:
+        try:
+            _ = (order_id, self._pool)
+            return Ok(None)
+        except Exception as exc:
+            return Err(DbError(cause=exc))
+
+# tests/fakes.py: fake para tests y dev.
+class InMemoryOrderRepository:
+    def __init__(self) -> None:
+        self._orders: dict[str, OrderSnapshot] = {}
+
+    def seed(self, order: OrderSnapshot) -> None:
+        self._orders[str(order.order_id)] = order
+
+    async def find(self, order_id: OrderId) -> Result[OrderSnapshot | None, DbError]:
+        return Ok(self._orders.get(str(order_id)))
+```
 
 ```python
 # shell/handlers.py
+from typing import Annotated
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import JSONResponse
+from pydantic import ValidationError
+
 shell_app = FastAPI()
 
-@shell_app.post("/refund")
-async def refund_handler(payload: object) -> JSONResponse:
-    # 1. Parsear en el borde: JSON desconocido se vuelve marcas probadas.
-    # Nota: Request manual pierde docs OpenAPI 422 automaticas; usa param DTO para docs.
+def get_order_repository() -> OrderRepository:
+    # Cableado una vez en startup al adaptador Postgres.
+    # Tests lo sustituyen con dependency_overrides y el fake en memoria.
+    raise NotImplementedError
+
+@shell_app.post("/refund", response_model=None)
+async def refund_handler(
+    request: Request,
+    repo: Annotated[OrderRepository, Depends(get_order_repository)],
+) -> JSONResponse:
+    # 1. Parsear en el borde antes de tocar DB.
+    # Request manual pierde docs OpenAPI 422 automaticas.
+    # Usa param DTO para docs, esta forma solo muestra el borde explicito.
+    try:
+        payload: object = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid request"}, status_code=400)
     try:
         shaped = RefundRequestDto.model_validate(payload)
     except ValidationError:
@@ -808,30 +865,46 @@ async def refund_handler(payload: object) -> JSONResponse:
         return JSONResponse({"error": domain_to_message(err)}, status_code=domain_to_status(err))
     amount = Cents.parse(shaped.amount_cents)
     if isinstance(amount, Err):
-        err = InvalidAmount(detail="invalid amount")
+        err = InvalidAmount(detail=amount.error.detail)
         return JSONResponse({"error": domain_to_message(err)}, status_code=domain_to_status(err))
-    order_id = UserId.parse(shaped.order_id)
+    order_id = OrderId.parse(shaped.order_id)
     if isinstance(order_id, Err):
-        err = InvalidOrderId(detail="invalid order id")
+        err: DomainError = UserNotFound(user_id=shaped.order_id)
         return JSONResponse({"error": domain_to_message(err)}, status_code=domain_to_status(err))
-    # 2. Rehidratar estado minimo, llamar al core puro. El shell nunca mintea directo.
-    # Nunca loguees email crudo: usa request_id/order_id. Prod exige Idempotency-Key, metricas refund_total y core sync fuera del loop.
+
+    # 2. Cargar estado persistente via el puerto.
+    # Nunca fabricar Order desde el amount del request.
     assert isinstance(email, Ok) and isinstance(amount, Ok) and isinstance(order_id, Ok)
-    order = OrderSnapshot(order_id=shaped.order_id, balance=Cents._mint_after_check(10_000), already_refunded=False)
-    refund = calculate_refund(order, amount.value, RefundPolicy(max_cents=Cents._mint_after_check(500_000)))
+    loaded = await repo.find(order_id.value)
+    if isinstance(loaded, Err):
+        return JSONResponse({"error": "internal error"}, status_code=app_to_status(loaded.error))
+    if loaded.value is None:
+        err: DomainError = UserNotFound(user_id=shaped.order_id)
+        return JSONResponse({"error": domain_to_message(err)}, status_code=domain_to_status(err))
+    order = loaded.value
+    cap = Cents.parse(500_000)
+    assert isinstance(cap, Ok)
+    policy = RefundPolicy(max_cents=cap.value)
+    refund = calculate_refund(order, amount.value, policy)
     if isinstance(refund, Err):
         return JSONResponse(
             {"error": domain_to_message(refund.error)},
             status_code=domain_to_status(refund.error),
         )
-    # 3. Mapear a transporte. Sin logica aqui.
+
+    # 3. Mapear a transporte.
+    # Sin logica aqui.
     return JSONResponse(
         {"orderId": refund.value.order_id, "refundedCents": refund.value.amount.to_int()},
         status_code=200,
     )
 ```
 
-El testing se divide limpio. Prueba `calculate_refund` con structs planos y sin mocks. Prueba el handler con payloads JSON reales: JSON malformado, email malo, monto negativo y doble refund, cada uno con su status.
+El testing se divide limpio.
+Prueba `calculate_refund` con structs planos y sin mocks.
+Prueba el handler con `InMemoryOrderRepository` via `dependency_overrides` y payloads JSON reales.
+Cubre JSON malformado, email malo, monto negativo, fila faltante 404 y doble refund.
+Intercambia el adaptador sin tocar el core porque el handler solo depende del Protocol.
 
 ## 10. Tabla defensive vs type-driven
 
@@ -849,7 +922,7 @@ Si una fila se mueve a la izquierda, regresa la prueba al tipo.
 | Estado de workflow | Flags como `is_paid` con `if` antes de cada accion | Type-state `OrderState[Draft]` a `OrderState[Paid]` con genericos | Transiciones ilegales son errores del checker |
 | Costo en hot path | `model_validate` repetido en handler, servicio y repo | Parse una vez en el edge, pasa value objects con `slots` sin revalidar | Prueba sin impuesto de performance |
 | Testing | Tests a mano con pocos literales | Hypothesis con cientos de inputs Unicode mas shrinking y `@example` | Confianza matematica en parsers, reproductores minimos |
-| Arquitectura | Handlers mezclan Pydantic, DB y reglas con `async` en todos lados | Core puro sync con `calculate_refund` mas shell FastAPI y Pydantic delgado | Core testeable y portable, efectos aislados y auditables |
+| Arquitectura | Handlers mezclan Pydantic, driver y reglas con `async` en todos lados | Core puro sync con `calculate_refund` mas shell FastAPI delgado con puerto `OrderRepository` (`PostgresOrderRepository` prod, `InMemoryOrderRepository` tests) | Core testeable y portable, efectos aislados y adaptador intercambiable |
 
 ## 11. Reglas de oro y bibliografia
 

@@ -833,33 +833,96 @@ pub struct RefundResponseDto {
 ```
 
 El handler de Axum une los dos mundos y nada mas.
-Parsea en el borde, rehidrata estado minimo, llama al core puro y mapea a DTO.
+Desacopla la infra con un puerto trait en la capa app.
+El puerto solo habla tipos de dominio.
+El shell provee el adaptador y Axum lo inyecta via `State`.
 Sin logica de negocio aqui.
+La API de `calculate_refund` no cambia.
+
+```rust
+// src/app/ports.rs: puerto hexagonal, solo tipos de dominio.
+use crate::domain::order::Order;
+use crate::domain::order_id::OrderId;
+
+pub trait OrderRepository: Send + Sync + 'static {
+    async fn find(&self, id: &OrderId) -> Result<Option<Order>, sqlx::Error>;
+}
+```
+
+```rust
+// src/shell/sqlx_repo.rs: un adaptador tras el puerto.
+// Las filas SQL re-entran al dominio via OrderId::parse y amigos.
+pub struct SqlxOrderRepo {
+    pool: sqlx::PgPool,
+}
+
+impl OrderRepository for SqlxOrderRepo {
+    async fn find(&self, id: &OrderId) -> Result<Option<Order>, sqlx::Error> {
+        // SELECT id, user_id, email, amount_cents FROM orders WHERE id = $1.
+        let _ = (id, &self.pool);
+        Ok(None)
+    }
+}
+
+// tests/fakes.rs, usable tambien en dev.
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+#[derive(Default)]
+pub struct InMemoryOrderRepo {
+    orders: Mutex<HashMap<String, Order>>,
+}
+
+impl OrderRepository for InMemoryOrderRepo {
+    async fn find(&self, id: &OrderId) -> Result<Option<Order>, sqlx::Error> {
+        Ok(self
+            .orders
+            .lock()
+            .expect("test lock is not poisoned")
+            .get(id.as_str())
+            .cloned())
+    }
+}
+```
 
 ```rust
 // src/shell/handlers.rs
+use std::sync::Arc;
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use crate::app::error::AppError;
+use crate::app::ports::OrderRepository;
+use crate::core::refunds::{RefundPolicy, calculate_refund};
+use crate::domain::error::DomainError;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub repo: Arc<dyn OrderRepository>,
+    pub policy: RefundPolicy,
+}
 
 pub async fn refund_handler(
-    State(policy): State<RefundPolicy>,
+    State(state): State<AppState>,
     Json(raw): Json<RefundRequestDto>,
 ) -> Result<impl IntoResponse, AppError> {
-    // 1. Parsear en el borde: String e i64 se vuelven Email, UserId, Cents.
-    // Forma invalida es InvalidOrderId 400; forma valida pero fila faltante es UserNotFound 404.
-    let email = Email::parse(raw.email).map_err(DomainError::InvalidEmail)?;
-    let user_id = UserId::parse(raw.order_id).map_err(|_| DomainError::InvalidOrderId)?;
-    let amount = Cents::parse(raw.amount_cents).map_err(|_| DomainError::InvalidAmount)?;
+    // 1. Parsear en el borde antes de tocar DB.
+    // Forma invalida es InvalidOrderId 400.
+    // Fila faltante es UserNotFound 404.
+    let order_id = OrderId::parse(&raw.order_id).map_err(DomainError::InvalidOrderId)?;
+    let _request_email = Email::parse(&raw.email).map_err(DomainError::InvalidEmail)?;
+    let amount = Cents::parse(raw.amount_cents).map_err(DomainError::InvalidAmount)?;
 
-    // 2. Rehidratar estado minimo y llamar al core puro.
-    let order = Order {
-        id: user_id,
-        email,
-        amount,
-        method: PaymentMethod::Cash,
-    };
-    let refund = calculate_refund(&order, amount, &policy)?;
+    // 2. Cargar estado persistente via el puerto.
+    // Nunca fabricar Order desde el amount del request.
+    let order = state
+        .repo
+        .find(&order_id)
+        .await
+        .map_err(AppError::Database)?
+        .ok_or(DomainError::UserNotFound)?;
+    let refund = calculate_refund(&order, amount, &state.policy)?;
 
-    // 3. Mapear a DTO. Sin logica de negocio aqui.
+    // 3. Mapear a DTO.
+    // Sin logica de negocio aqui.
     let body = RefundResponseDto {
         order_id: refund.order_id,
         refunded_cents: refund.amount.value(),
@@ -897,8 +960,9 @@ impl IntoResponse for AppError {
 
 El testing se divide limpio.
 Prueba `calculate_refund` con structs planos y sin mocks.
-Prueba el handler con `tower::ServiceExt::oneshot` y payloads JSON reales.
-El core queda rapido y determinista porque los efectos viven solo en el shell.
+Prueba el handler con `InMemoryOrderRepo` mas `tower::ServiceExt::oneshot` y payloads JSON reales.
+Cubre JSON malformado, email malo, monto negativo, fila faltante 404 y doble refund.
+Intercambia el adaptador sin tocar el core porque el handler solo depende del trait.
 
 ## 10. Tabla defensive vs type-driven
 
@@ -916,7 +980,7 @@ Si una fila se mueve a la izquierda, regresa la prueba al tipo.
 | Estado de workflow | Flags como `is_paid` con `if` antes de cada accion | Type-state `Order<Draft>` a `Order<Paid>` con move semantics | Transiciones ilegales no compilan, handles rancios se destruyen |
 | Costo en hot path | Newtypes `String` clonados en cada capa | `EmailRef<'a>` prestado sin heap, promote a owned una vez | Prueba sin impuesto de performance |
 | Testing | `#[test]` hechos a mano con pocos literales | `proptest` con miles de inputs Unicode mas shrinking | Confianza matematica en parsers, reproductores minimos |
-| Arquitectura | Handlers mezclan Serde, DB y reglas con `async` en todos lados | Core puro sync con `calculate_refund` mas shell Axum y Serde delgado | Core testeable y portable, efectos aislados y auditables |
+| Arquitectura | Handlers mezclan Serde, sqlx y reglas con `async` en todos lados | Core puro sync con `calculate_refund` mas shell Axum delgado con puerto `OrderRepository` (`SqlxOrderRepo` prod, `InMemoryOrderRepo` tests) | Core testeable y portable, efectos aislados y adaptador intercambiable |
 
 ## 11. Reglas de oro y bibliografia
 

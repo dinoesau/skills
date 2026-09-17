@@ -145,3 +145,34 @@ export function chargeOnce(rawAmount: unknown): void {
   applyCharge(parsed.value);
 }
 ```
+
+## 8. Driver hardwireado vs `OrderRepository`
+
+Before: el handler importa el driver y fabrica el balance.
+After: la factory recibe el puerto y carga persistencia real.
+
+```ts
+// Before: acoplado y sin 404 real.
+const refund = calculateRefund(
+  { orderId: orderId.value, balance: mintCentsUnchecked(10_000), alreadyRefunded: false },
+  amount.value, { maxCents: mintCentsUnchecked(500_000) },
+);
+
+// After: puerto con 404 y 500 tipados.
+export interface OrderRepository {
+  find(orderId: OrderId): Promise<OrderSnapshot | null>;
+}
+
+export function createRefundHandler(deps: { repo: OrderRepository; policy: RefundPolicy }): Hono {
+  const app = new Hono();
+  app.post("/refund", async (c) => {
+    // parse borde aqui, luego:
+    // const order = await deps.repo.find(orderId.value).catch((cause) => { throw { kind: "Database", cause }; });
+    // if (order === null) return c.json({ error: "user not found" }, 404);
+    // return calculateRefund(order, amount.value, deps.policy);
+  });
+  return app;
+}
+
+// Prod usa PostgresOrderRepository, tests usan InMemoryOrderRepository con seed.
+```

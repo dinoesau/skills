@@ -28,6 +28,7 @@ Esperado:
 - [ ] 400, 404 o 422 por variante de dominio; 500 generico para infra.
 - [ ] Agregar una variante rompe el `match` en compilacion.
 - [ ] Adversarial: forma invalida `InvalidOrderId` 400 vs fila faltante `UserNotFound` 404, exceso `ExceedsMax` 422, doble refund `AlreadyRefunded` 422.
+- [ ] El handler inyecta `Arc<dyn OrderRepository>` via `State`; `SqlxOrderRepo` solo en prod y `InMemoryOrderRepo` con `oneshot` en tests; nunca fabrica `Order` desde el request.
 
 ## Escenario 3: type-state en workflow ordenado
 

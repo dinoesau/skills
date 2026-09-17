@@ -153,3 +153,27 @@ def charge_once(raw_amount: object) -> None:
         return
     apply_charge(parsed.value)
 ```
+
+## 9. Driver hardwireado vs `OrderRepository`
+
+Before: el handler fabrica `OrderSnapshot` desde el request.
+After: el puerto carga persistencia real y el core no cambia.
+
+```python
+# Before: acoplado y sin 404 real.
+order = OrderSnapshot(order_id=shaped.order_id, balance=Cents._mint_after_check(10_000), already_refunded=False)
+
+# After: puerto con 404 y 500 tipados.
+class OrderRepository(Protocol):
+    async def find(self, order_id: OrderId) -> Result[OrderSnapshot | None, DbError]:
+        ...
+
+async def refund_handler(request: Request, repo: Annotated[OrderRepository, Depends(get_order_repository)]) -> JSONResponse:
+    # parse borde aqui, luego:
+    # loaded = await repo.find(order_id.value)
+    # if isinstance(loaded, Err): return JSONResponse({"error": "internal error"}, status_code=500)
+    # if loaded.value is None: return JSONResponse({"error": "user not found"}, status_code=404)
+    # return calculate_refund(loaded.value, amount.value, policy)
+
+# Prod usa PostgresOrderRepository, tests usan InMemoryOrderRepository via dependency_overrides.
+```

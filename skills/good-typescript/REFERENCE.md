@@ -658,44 +658,121 @@ export const RefundRequestDto = z.object({
 });
 ```
 
-El handler Hono une los dos mundos y nada mas. En Fastify reemplaza `c.req.json()` por `request.body` y `c.json()` por `reply.code().send()`. El core no cambia porque nunca importo el framework.
+El handler Hono une los dos mundos y nada mas.
+Desacopla la infra con un puerto interfaz en la capa app.
+El puerto solo habla tipos de dominio.
+El shell provee el adaptador y el handler lo recibe via factory.
+En Fastify reemplaza `c.req.json()` por `request.body` y `c.json()` por `reply.code().send()`.
+El core no cambia porque nunca importo el framework.
+La API de `calculateRefund` no cambia.
 
 ```ts
-// shell/handlers.ts
-app.post("/refund", async (c) => {
-  // 1. Parsear en el borde: unknown JSON se vuelve brands probados.
-  const raw: unknown = await c.req.json().catch(() => null);
-  const shaped = RefundRequestDto.safeParse(raw);
-  if (!shaped.success) return c.json({ error: "invalid request" }, 400);
-  const email = parseEmail(shaped.data.email);
-  if (!email.ok) {
-    const e: DomainError = { kind: "InvalidEmail", error: email.error };
-    return c.json({ error: domainToMessage(e) }, domainToStatus(e));
-  }
-  const orderId = parseOrderId(shaped.data.orderId);
-  if (!orderId.ok) {
-    const e: DomainError = { kind: "InvalidOrderId" };
-    return c.json({ error: domainToMessage(e) }, domainToStatus(e));
-  }
-  const amount = parseCents(shaped.data.amountCents);
-  if (!amount.ok) {
-    const e: DomainError = { kind: "InvalidAmount" };
-    return c.json({ error: domainToMessage(e) }, domainToStatus(e));
-  }
-  // 2. Rehidratar estado minimo, llamar al core puro.
-  // Nunca filtres `shaped.error.message` ni email crudo al cliente: loguea conteo + request_id/order_id.
-  // Prod: exige `Idempotency-Key` con dedup, emite `refund_total{kind}`, manten el core sync fuera del event loop.
-  const refund = calculateRefund(
-    { orderId: orderId.value, balance: mintCentsUnchecked(10_000), alreadyRefunded: false },
-    amount.value, { maxCents: mintCentsUnchecked(500_000) },
-  );
-  if (!refund.ok) return c.json({ error: domainToMessage(refund.error) }, domainToStatus(refund.error));
-  // 3. Mapear a transporte. Sin logica aqui.
-  return c.json({ orderId: refund.value.orderId, refundedCents: refund.value.amount }, 200);
-});
+// app/ports.ts: puerto hexagonal, solo tipos de dominio.
+import type { OrderId } from "../domain/brand.js";
+import type { OrderSnapshot, RefundPolicy } from "../core/refunds.js";
+
+export interface OrderRepository {
+  find(orderId: OrderId): Promise<OrderSnapshot | null>;
+}
+
+export interface AppDeps {
+  readonly repo: OrderRepository;
+  readonly policy: RefundPolicy;
+}
 ```
 
-El testing se divide limpio. Prueba `calculateRefund` con structs planos y sin mocks. Prueba el handler con payloads JSON reales: JSON malformado, email malo, monto negativo y doble refund, cada uno con su status.
+```ts
+// shell/postgres-repo.ts: un adaptador tras el puerto.
+// Las filas SQL re-entran al dominio via parseOrderId, parseEmail y parseCents.
+import type { OrderId } from "../domain/brand.js";
+import type { OrderSnapshot } from "../core/refunds.js";
+import type { OrderRepository } from "../app/ports.js";
+
+export class PostgresOrderRepository implements OrderRepository {
+  constructor(private readonly pool: { query: (sql: string, params: unknown[]) => Promise<{ rows: unknown[] }> }) {}
+  async find(orderId: OrderId): Promise<OrderSnapshot | null> {
+    const _ = [orderId, this.pool];
+    return null;
+  }
+}
+
+// shell/memory-repo.ts: fake para tests y dev.
+export class InMemoryOrderRepository implements OrderRepository {
+  private readonly orders = new Map<string, OrderSnapshot>();
+  seed(order: OrderSnapshot): void {
+    this.orders.set(order.orderId as string, order);
+  }
+  async find(orderId: OrderId): Promise<OrderSnapshot | null> {
+    return this.orders.get(orderId as string) ?? null;
+  }
+}
+```
+
+```ts
+// shell/handlers.ts: shell async delgado alrededor del core puro.
+import { Hono } from "hono";
+import { RefundRequestDto } from "./dto.js";
+import { parseEmail } from "../domain/email.js";
+import { parseCents } from "../domain/money.js";
+import { parseOrderId } from "../domain/order-id.js";
+import { calculateRefund } from "../core/refunds.js";
+import type { AppDeps } from "../app/ports.js";
+import { reportAppError } from "./handler-helpers.js";
+
+export function createRefundHandler(deps: AppDeps): Hono {
+  const app = new Hono();
+  app.post("/refund", async (c) => {
+    // 1. Parsear en el borde antes de tocar DB.
+    // Forma invalida es InvalidOrderId 400.
+    // Fila faltante es UserNotFound 404.
+    const raw: unknown = await c.req.json().catch(() => null);
+    const shaped = RefundRequestDto.safeParse(raw);
+    if (!shaped.success) return c.json({ error: "invalid request" }, 400);
+    const email = parseEmail(shaped.data.email);
+    if (!email.ok) return c.json({ error: "invalid email" }, 400);
+    const amount = parseCents(shaped.data.amountCents);
+    if (!amount.ok) return c.json({ error: "invalid amount" }, 400);
+    const orderId = parseOrderId(shaped.data.orderId);
+    if (!orderId.ok) {
+      const report = reportAppError({ kind: "Domain", error: { kind: "InvalidOrderId" } }, console);
+      return c.json(report.body, report.status as 400 | 404 | 422 | 500);
+    }
+
+    // 2. Cargar estado persistente via el puerto.
+    // Nunca fabricar Order desde el amount del request.
+    let order;
+    try {
+      order = await deps.repo.find(orderId.value);
+    } catch (cause) {
+      const report = reportAppError({ kind: "Database", cause }, console);
+      return c.json(report.body, report.status as 400 | 404 | 422 | 500);
+    }
+    if (order === null) {
+      const report = reportAppError(
+        { kind: "Domain", error: { kind: "UserNotFound", userId: orderId.value as unknown as import("../domain/brand.js").UserId } },
+        console,
+      );
+      return c.json(report.body, report.status as 400 | 404 | 422 | 500);
+    }
+    const refund = calculateRefund(order, amount.value, deps.policy);
+    if (!refund.ok) {
+      const report = reportAppError({ kind: "Domain", error: refund.error }, console);
+      return c.json(report.body, report.status as 400 | 404 | 422 | 500);
+    }
+
+    // 3. Mapear a transporte.
+    // Sin logica aqui.
+    return c.json({ orderId: refund.value.orderId, refundedCents: refund.value.amount }, 200);
+  });
+  return app;
+}
+```
+
+El testing se divide limpio.
+Prueba `calculateRefund` con structs planos y sin mocks.
+Prueba el handler con `InMemoryOrderRepository` y payloads HTTP reales.
+Cubre JSON malformado, email malo, monto negativo, fila faltante 404 y doble refund.
+Intercambia el adaptador sin tocar el core porque el handler solo depende de la interfaz.
 
 ## 10. Tabla defensive vs type-driven
 
@@ -713,7 +790,7 @@ Si una fila se mueve a la izquierda, regresa la prueba al tipo.
 | Estado de workflow | Flags como `isPaid` con `if` antes de cada accion | Type-state `Order<Draft>` a `Order<Paid>` con genericos y tag | Transiciones ilegales no compilan |
 | Costo en hot path | `safeParse` repetido en handler, servicio y repo | Parse una vez en el edge, pasa brands zero-runtime sin alocacion | Prueba sin impuesto de performance |
 | Testing | Tests a mano con pocos literales | `fast-check` con cientos de inputs Unicode mas shrinking y seeds | Confianza matematica en parsers, reproductores minimos |
-| Arquitectura | Handlers mezclan Zod, DB y reglas con `async` en todos lados | Core puro sync con `calculateRefund` mas shell Hono y Zod delgado | Core testeable y portable, efectos aislados y auditables |
+| Arquitectura | Handlers mezclan Zod, driver y reglas con `async` en todos lados | Core puro sync con `calculateRefund` mas shell Hono delgado con puerto `OrderRepository` (`PostgresOrderRepository` prod, `InMemoryOrderRepository` tests) | Core testeable y portable, efectos aislados y adaptador intercambiable |
 
 ## 11. Reglas de oro y bibliografia
 

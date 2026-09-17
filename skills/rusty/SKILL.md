@@ -10,7 +10,7 @@ description: >
 license: MIT
 allowed-tools: Bash
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # Rusty - Modelado de dominio funcional en Rust
@@ -124,6 +124,9 @@ Si es un solo booleano sin orden, no uses type-state.
 Si el hot path solo presta el valor, usa la vista prestada `EmailRef`.
 Si debes almacenar el valor, promueve a owned una sola vez.
 Si la forma es valida pero la fila falta en DB, retorna `UserNotFound` 404; si la forma es invalida, retorna `InvalidOrderId` 400.
+Si cargas estado persistente, usa puerto `OrderRepository` con `Arc<dyn OrderRepository>` via `State`; nunca hardwirees sqlx en el handler.
+Si el repo falla, mapea a `AppError::Database` 500; si retorna `None`, mapea a `UserNotFound` 404.
+Si testeas el handler, usa `InMemoryOrderRepo` con `oneshot`; reserva `SqlxOrderRepo` para prod.
 Si el monto excede politica, retorna `ExceedsMax` 422, no `InvalidAmount` 400.
 El core debe chequear `AlreadyRefunded` desde flag persistente; el type-state cubre moves en memoria; usa ambos.
 
