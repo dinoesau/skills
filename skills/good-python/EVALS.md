@@ -53,6 +53,17 @@ Esperado:
 - [ ] Handler con puerto `Protocol` + `Depends` + fake in-memory, `OrderId.parse -> InvalidOrderId` 400, `None -> UserNotFound` 404, una sola anotacion `err`. `Slug` con `SLUG_PATTERN` compartido, `cast` con comentario de invarianza, `_mint_after_check` privado, narrowing-`assert` solo tras chequeo exhaustivo.
 - [ ] Prosa de exhaustividad acredita `assert_never`, no `match` sin wildcard. Verificacion: extraer bloques y pasar `mypy --strict`, diff contra posts post-#17/#19.
 
+## Escenario 5: secretos y lints (v1.3.0)
+
+Entrada: handler que hace `print(f"sending to {email}")` y construye `Email(_value="x")` fuera del modulo.
+
+Esperado:
+
+- [ ] Envuelve PII en `CustomerEmail` con `__str__`/`__repr__` redactados y `expose_for_sending`; tokens con `SecretStr` de pydantic.
+- [ ] PoC `f"{customer}"` imprime `[redacted]`; `f"{email}"` solo en contextos no-PII como recibos.
+- [ ] Config concreta `[tool.mypy] strict` + `[tool.ruff.lint] select SLF`; `mypy --strict .` y `ruff check .` pasan.
+- [ ] PoC acceso a `._value` fuera del modulo definidor lo marca `ruff` SLF.
+
 ## Prueba de disparo
 
 Debe activarse con: "quita las validaciones repetidas en este handler Python",

@@ -10,7 +10,7 @@ description: >
 license: MIT
 allowed-tools: Bash
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
 ---
 
 # Rusty - Modelado de dominio funcional en Rust
@@ -76,6 +76,11 @@ impl Email {
 }
 ```
 
+Para PII (emails de cliente, tokens), envuelve en `CustomerEmail`: sin `Display`, sin `AsRef<str>`, sin `Deref`, con `Debug` redactado a mano y escotillas explicitas (`expose_for_sending`, `redacted`).
+`Email` conserva `Display` solo para contextos no-PII como recibos.
+Para passwords y tokens usa `secrecy::SecretString` con `zeroize::ZeroizeOnDrop` (agrega `secrecy = "0.8"` y `zeroize = "1"` a `Cargo.toml`).
+Ver [REFERENCE.md](./REFERENCE.md#3-pilar-1-newtypes-y-smart-constructors).
+
 ### 3. Totalizar con ADTs y railway
 
 Modela alternativas con `enum` y combinaciones con `struct`.
@@ -103,6 +108,24 @@ cargo clippy -- -D warnings
 cargo test
 ```
 
+Exige este header en la raiz del crate (`src/lib.rs` o `src/main.rs`); convierte disciplina en fallos de build.
+`clippy::unwrap_used` y `clippy::expect_used` prohiben `unwrap`/`expect` fuera de tests; `clippy::panic` banea `panic!`; `forbid(unsafe_code)` rechaza `unsafe` propio.
+
+```rust
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+#![deny(clippy::panic)]
+```
+
+Marca accesores de valor con `#[must_use]` (`Result` ya lo trae) y nunca implementes `Deref<Target = str>` para newtypes: re-expone cada metodo de `str` y debilita el borde.
+En tests permite `expect` solo ahi:
+
+```rust
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests { /* ... */ }
+```
+
 Busca fugas del patron con estos greps.
 Si alguno imprime lineas en `src/domain` o `src/core`, corrige antes de entregar.
 
@@ -111,6 +134,7 @@ grep -rn 'Result<.*, String>' src/domain src/core || true
 grep -rn 'pub struct .* (pub ' src/domain || true
 grep -rn '\.unwrap()' src/domain src/core || true
 grep -rn 'anyhow' src/domain src/core || true
+grep -rn 'Deref' src/domain src/core || true
 ```
 
 ## Decisiones condicionales
@@ -139,6 +163,8 @@ El core debe chequear `AlreadyRefunded` desde flag persistente; el type-state cu
 | "Un `bool is_paid` basta" | El orden se puede olvidar; el type-state no compila mal |
 | "`unwrap` aqui nunca falla" | Si es input de usuario, retorna `Result`; reserva panic para bugs imposibles |
 | "Clono el `String` por claridad" | En hot path usa `EmailRef` y promueve una vez |
+| "`Email` con `Display` basta; no logueo crudo por disciplina" | `CustomerEmail` sin `Display` mas `secrecy`/`zeroize` para tokens; la fuga es error de compilacion |
+| "El lint de `unwrap` es aspiracional" | `forbid(unsafe_code)` mas `deny(unwrap_used, expect_used, panic)` y `#[must_use]`; `Deref` baneado |
 
 ## Referencias de un nivel
 

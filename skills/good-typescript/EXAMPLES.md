@@ -146,7 +146,7 @@ export function chargeOnce(rawAmount: unknown): void {
 }
 ```
 
-<## 8. Driver hardwireado vs `OrderRepository` (variante nullable local)
+## 8. Driver hardwireado vs `OrderRepository` (variante nullable local)
 
 Before: el handler importa el driver y fabrica el balance.
 After: la factory recibe el puerto y carga persistencia real.
@@ -220,5 +220,45 @@ After: carga via puerto, `Result` distingue `UserNotFound` 404 y `Database` 500.
 export function createRefundHandler(deps: AppDeps): Hono {
   void deps; // repo + policy inyectados, core puro sin cambios
   throw new Error("ver REFERENCE.md#9-arquitectura-functional-core-imperative-shell");
+}
+```
+
+## 12. `Email` interpolable vs `CustomerEmail` opaco
+
+Before: cada template sobre `Email` es una fuga de PII que chequea.
+After: la fuga es error `TS2345`.
+
+```ts
+// Before: fuga que chequea.
+export function notifyParsed(email: Email): void {
+  console.log(`sending to ${email}`);
+}
+
+// After: redactado por defecto; crudo solo en el borde de envio.
+export function notifyCustomer(customer: CustomerEmail): void {
+  console.log(`sending to ${customer}`); // sending to [redacted]
+  sendEmail(customer.exposeForSending());
+}
+
+// PoC: pasar CustomerEmail donde se espera string falla con TS2345.
+export function sendEmail(to: string): void {
+  void to;
+}
+```
+
+## 13. `maybe!` por disciplina vs `no-non-null-assertion`
+
+Before: `maybe!` compila con `strict` + `noUncheckedIndexedAccess` y revienta en runtime.
+After: error de lint.
+
+```ts
+// Before: compila, revienta luego.
+declare const maybe: string | undefined;
+export const crashed: string = maybe!;
+
+// After: eslint.config.mjs con "@typescript-eslint/no-non-null-assertion": "error".
+// Version exigida: narrowing explicito que el checker verifica.
+export function orEmpty(value: string | undefined): string {
+  return value ?? "";
 }
 ```

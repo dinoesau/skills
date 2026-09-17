@@ -16,6 +16,7 @@ Lee solo la seccion que necesites para la tarea actual.
 - [8. Ingenieria avanzada: brands zero-runtime y fast-check](#8-ingenieria-avanzada-brands-zero-runtime-y-fast-check)
 - [9. Arquitectura: functional core, imperative shell](#9-arquitectura-functional-core-imperative-shell)
 - [10. Tabla defensive vs type-driven](#10-tabla-defensive-vs-type-driven)
+- [Apendice A: lints del compilador como invariantes](#apendice-a-lints-del-compilador-como-invariantes)
 - [11. Reglas de oro y bibliografia](#11-reglas-de-oro-y-bibliografia)
 
 ## 1. Antipatron del TypeScript defensivo
@@ -238,6 +239,50 @@ export function parseOrderId(raw: unknown): Result<OrderId, { readonly kind: "In
 ```
 
 Limite honesto: en Rust el campo privado es inforjable fisicamente. En TypeScript el brand se borra en runtime y cualquier modulo puede escribir `raw as Email`, incluso `{} as StagedOrder<Paid>`. La inforjabilidad es disciplinaria. Sostenla con tres reglas: el `as` vive solo en el smart constructor, prohibe `as` fuera con ESLint `no-restricted-syntax` sobre `TSAsExpression` con allowlist `domain/*`, y re-exporta el tipo opaco sin la llave del brand. Revisa cada `as` nuevo como un `sudo`.
+
+### Secret types: redaccion de PII por tipo, no por disciplina
+
+`Email` es `string` en runtime, asi que cada template literal sobre el es una fuga de PII que chequea.
+La redaccion por comentario no sobrevive al proximo contribuidor.
+Envuelve PII en el borde en una clase opaca sin coercion a string.
+
+```ts
+// domain/customer-email.ts: unico modulo que puede crear CustomerEmail.
+import type { Email } from "./brand.js";
+import { emailToString } from "./email.js";
+
+export class CustomerEmail {
+  readonly #inner: string;
+  private constructor(inner: string) {
+    this.#inner = inner;
+  }
+  static fromEmail(email: Email): CustomerEmail {
+    return new CustomerEmail(emailToString(email));
+  }
+  // Sin conversion implicita a string. Solo escotillas explicitas:
+  exposeForSending(): string {
+    return this.#inner;
+  }
+  redacted(): "[redacted]" {
+    return "[redacted]";
+  }
+  toString(): string {
+    return "[redacted]";
+  }
+  toJSON(): string {
+    return "[redacted]";
+  }
+}
+```
+
+Un template literal sobre `Email` sigue mostrando la direccion cruda para contextos no-PII como recibos.
+El mismo template sobre `CustomerEmail`, mas `JSON.stringify` y `toString`, muestran `[redacted]`.
+Pasar un `CustomerEmail` donde se espera `string` falla con `TS2345`.
+El log solo puede imprimir la forma redactada salvo que el call site pida `exposeForSending()`.
+
+Guarda `Brand<string, "Email">` para validacion de forma en hot paths porque cuesta cero en runtime.
+Usa `CustomerEmail` para PII en el borde de log y envio.
+Parsea una vez a `Email`, envuelve una vez en `CustomerEmail` y deja que el checker rechace la fuga accidental.
 
 ## 4. Pilar 2: ADTs y funciones totales
 
@@ -644,7 +689,7 @@ test("parsed value is trimmed input", () => {
 
 Corre con `vitest run` y pina `seed: 42, numRuns: 1000` en CI para determinismo. Guarda el seed que falla como test de regresion tras shrinking. Ganas robustez matematica: formas validas siempre pasan, invalidas siempre fallan, Unicode hostil nunca lanza, y la normalizacion hace round-trip.
 
-Requiere `tsconfig.json` con `strict`, `noUncheckedIndexedAccess` y `declaration:true` (exigido por `export const StageTag`). Pins: `hono ^4`, `zod ^3` (nota: Zod 4 usa `z.email()`/`z.uuid()` y param `error`; si migras, cambia `z.string().email()` y `shaped.error.message` por `issues`), `ts-pattern ^5`, `fast-check ^3`, `vitest ^2`, `typescript ^5`.
+Requiere `tsconfig.json` con `strict`, `noUncheckedIndexedAccess` y `declaration:true` (exigido por `export const StageTag`). Pins: `hono ^4`, `zod ^3` (nota: Zod 4 usa `z.email()`/`z.uuid()` y param `error`; si migras, cambia `z.string().email()` y `shaped.error.message` por `issues`), `ts-pattern ^5`, `fast-check ^3`, `vitest ^2`, `typescript ^5`, `eslint ^9`, `typescript-eslint ^8`.
 
 ## 9. Arquitectura: functional core, imperative shell
 
@@ -787,7 +832,7 @@ export function createRefundHandler(deps: AppDeps): Hono {
 }
 // Wire una vez en startup: parsea el cap de politica una sola vez y pasa `{ repo, policy }`.
 // Tests pasan `InMemoryOrderRepository` en vez de Postgres, sin DB.
-// Prod: exige `Idempotency-Key` con dedup, emite `refund_total{kind}`, manten el core sync fuera del event loop.
+// Prod: exige `Idempotency-Key` con dedup, emite `refund_total{kind}`, manten el core sync fuera del event loop. Loguea con spans `request_id`/`order_id`, nunca email crudo: `CustomerEmail` muestra `[redacted]` por diseño y `exposeForSending()` queda reservado al borde de envio.
 ```
 
 Variante simple nullable preservada de la rama local.
@@ -903,6 +948,36 @@ Si una fila se mueve a la izquierda, regresa la prueba al tipo.
 | Costo en hot path | `safeParse` repetido en handler, servicio y repo | Parse una vez en el edge, pasa brands zero-runtime sin alocacion | Prueba sin impuesto de performance |
 | Testing | Tests a mano con pocos literales | `fast-check` con cientos de inputs Unicode mas shrinking y seeds | Confianza matematica en parsers, reproductores minimos |
 | Arquitectura | Handlers mezclan Zod, driver y reglas con `async` en todos lados | Core puro sync con `calculateRefund` mas shell Hono delgado con puerto `OrderRepository` (`PostgresOrderRepository` prod, `InMemoryOrderRepository` tests) | Core testeable y portable, efectos aislados y adaptador intercambiable |
+| Secretos | `Email` brandeado interpolado en template literals por disciplina | Clase opaca `CustomerEmail` redactada por defecto, sin coercion a string | Fugas de PII como errores `TS2345`, `JSON.stringify` redactado |
+| Lints | Non-null assertions y casts `as` sueltos sin revisar | `no-non-null-assertion` mas `no-restricted-syntax` para `TSAsExpression` | Equivalentes a unwrap como errores de lint, forja confinada a `domain/*` |
+
+## Apendice A: lints del compilador como invariantes
+
+La regla 5 dice llevar invariantes al compilador, pero type-state mas `assertNever` son los unicos invariantes verificados por maquina en esta guia.
+El invariante mas barato es un bloque concreto de lints: el sketch de `tsconfig` de arriba mas un sketch de `eslint.config.mjs`.
+
+```js
+// eslint.config.mjs sketch. Extiende la regla no-restricted-syntax de `as` del pilar 1.
+import tseslint from "typescript-eslint";
+
+export default tseslint.config(
+  ...tseslint.configs.strict,
+  { rules: { "@typescript-eslint/no-non-null-assertion": "error" } },
+);
+```
+
+`no-non-null-assertion` es el `unwrap_used` de TypeScript.
+Convierte el crash de `maybe!` en error de lint y obliga narrowing explicito.
+La regla `no-restricted-syntax` del pilar 1 sobre `TSAsExpression` confina el cast `as` a `domain/*`, justo donde `parseEmail` acuna brands.
+Junto a `strict` mas `noUncheckedIndexedAccess`, las tres reglas hacen la disciplina verificada por maquina.
+
+Acota el rigor donde viven los tests.
+Los ejemplos de esta guia usan `!` y `as` en puntos estrechos revisados como fixtures y fakes in-memory.
+Permitelos ahi con disables a nivel de archivo y en ningun otro lado.
+
+Dos reglas mas completan el bloque.
+Guarda cada `as` dentro del modulo smart-constructor para auditar cada mint en un solo lugar.
+Y nunca loguees el brand crudo: loguea `CustomerEmail` (redactado por defecto) solo con spans `request_id`/`order_id`.
 
 ## 11. Reglas de oro y bibliografia
 

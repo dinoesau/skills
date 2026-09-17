@@ -51,6 +51,17 @@ Esperado:
 - [ ] `refund_status_code -> StatusCode` como mapeo unico usado por `IntoResponse`. Trait `OrderRepository` + `Arc<dyn>` via `State` + adapters sqlx/in-memory. `None -> UserNotFound` 404, `Err -> Database` 500. PoC `cargo check` + `clippy -D warnings`.
 - [ ] Verificacion: extraer bloques y pasar `cargo check` + `clippy -D warnings`, diff contra `content/en|es/post/*-stop-validating-everywhere/index.md` post-#17/#19.
 
+## Escenario 5: secretos y lints (v1.3.0)
+
+Entrada: handler que loguea `email = %email` y usa `.unwrap()` en dominio.
+
+Esperado:
+
+- [ ] Envuelve PII en `CustomerEmail` sin `Display`/`AsRef`/`Deref`, con `Debug` redactado a mano y `expose_for_sending` + `redacted`; tokens con `secrecy`/`zeroize`.
+- [ ] PoC `format!("{customer}")` falla con `E0277`; `format!("{email}")` solo en contextos no-PII como recibos.
+- [ ] Header con `forbid(unsafe_code)` + `deny(clippy::unwrap_used, expect_used, panic)` + `#[must_use]`; ningun `Deref<Target = str>` en dominio.
+- [ ] PoC `.unwrap()` en `src/domain` falla `cargo clippy -- -D warnings`.
+
 ## Prueba de disparo
 
 Debe activarse con: "quita las validaciones repetidas en este handler Rust",

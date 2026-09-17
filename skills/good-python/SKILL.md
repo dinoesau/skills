@@ -9,7 +9,7 @@ description: >
 license: MIT
 allowed-tools: Bash
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
 ---
 
 # Good-Python - Modelado de dominio funcional en Python
@@ -72,6 +72,11 @@ def parse_email(raw: object) -> Result[Email, EmailError]:
     # Retornar Ok(Email(_value=trimmed)) solo aqui.
 ```
 
+Para PII envuelve en `CustomerEmail`: `_inner: Email` con `__str__`/`__repr__` redactados y escotilla `expose_for_sending`.
+`Email` conserva `__str__` crudo solo para contextos no-PII como recibos.
+Para passwords y tokens usa `SecretStr` de pydantic, sin dependencia nueva.
+Ver [REFERENCE.md](./REFERENCE.md#3-pilar-1-value-objects-y-smart-constructors).
+
 ### 3. Totalizar con ADTs y railway
 
 Modela alternativas con uniones de dataclasses frozen y combinaciones con dataclasses producto.
@@ -102,6 +107,18 @@ ruff check .
 pytest
 ```
 
+Fija esta config minima (`pyproject.toml`); convierte disciplina en fallos del checker.
+`mypy --strict` rechaza transiciones de etapa malas; `ruff select SLF` marca acceso a `._value` fuera del modulo definidor.
+
+```toml
+[tool.mypy]
+strict = true
+
+[tool.ruff.lint]
+# SLF marca email._value fuera del modulo definidor.
+select = ["SLF"]
+```
+
 Busca fugas del patron con estos greps.
 `isinstance` esta permitido solo en `parse_*` del borde y en chequeos railway `isinstance(x, Err|Ok)`; prohibido para rechequear reglas de dominio en `core`.
 `raise ValueError` esta permitido solo dentro de `branded_str_validator` que se convierte a `Result` en `parse`; prohibido como error de dominio.
@@ -112,6 +129,8 @@ grep -rn 'model_validate' src/domain src/core || true
 grep -rn 'isinstance.*dict\|isinstance.*Any' src/core || true
 grep -rn 'raise ValueError' src/domain src/core || true
 grep -rn 'except Exception' src/domain src/core || true
+grep -rn '\._value' src/domain src/core | grep -v 'domain/email' || true
+grep -rn 'str(customer)' src/shell src/core || true
 ```
 
 ## Decisiones condicionales
@@ -140,6 +159,8 @@ Pydantic vive solo en DTOs shape-only del shell; el dominio nunca importa `BaseM
 | "Un `bool is_paid` basta" | El orden se puede olvidar; el type-state lo rechaza el checker |
 | "`assert` aqui nunca falla" | `assert` desaparece con `-O`; retorna `Result` para inputs de usuario |
 | "Repito `model_validate` por seguridad" | En hot path parsea una vez y pasa el objeto con `slots` sin revalidar |
+| "`Email` con `__str__` crudo basta; no logueo PII por disciplina" | `CustomerEmail` redactado por defecto mas `SecretStr` para tokens; el log accidental imprime `[redacted]` |
+| "No construir directo, exigido por review" | `mypy --strict` mas `ruff select SLF` que marca `._value` fuera del modulo |
 
 ## Referencias de un nivel
 

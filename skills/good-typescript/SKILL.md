@@ -10,7 +10,7 @@ description: >
 license: MIT
 allowed-tools: Bash
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
 ---
 
 # Good-TypeScript - Modelado de dominio funcional en TypeScript
@@ -77,6 +77,11 @@ export function emailToString(email: Email): string {
 }
 ```
 
+Para PII usa la clase opaca `CustomerEmail` (`#inner` privado, `toString`/`toJSON` redactados, escotillas `exposeForSending`/`redacted`).
+Pasar un `CustomerEmail` donde se espera `string` falla con `TS2345`.
+Guarda `Brand<string, "Email">` mas `emailToString` para forma en hot paths zero-runtime.
+Ver [REFERENCE.md](./REFERENCE.md#3-pilar-1-branded-types-y-smart-constructors).
+
 ### 3. Totalizar con ADTs y railway
 
 Modela alternativas con uniones discriminadas y combinaciones con interfaces.
@@ -104,6 +109,14 @@ npx eslint . --max-warnings 0
 npx vitest run
 ```
 
+Exige `no-non-null-assertion` en `eslint.config.mjs` (es el `unwrap_used` de TypeScript: convierte `maybe!` en error de lint) junto a la regla `no-restricted-syntax` de `TSAsExpression` del pilar 1.
+
+```js
+{ rules: { "@typescript-eslint/no-non-null-assertion": "error" } },
+```
+
+Pins: `eslint ^9` mas `typescript-eslint ^8` en devDependencies.
+
 Busca fugas del patron con estos greps.
 `safeParse` vive solo en parsers de `src/domain`, nunca en `src/core` ni repetido en servicio/repo.
 `throw new Error` vive solo en `assert.ts` via `assertNever`, nunca por input esperado.
@@ -115,6 +128,7 @@ grep -rn 'safeParse' src/core || true
 grep -rn 'as Email\|as Cents\|as UserId' src --include='*.ts' | grep -v 'src/domain/' || true
 grep -rn 'throw new Error' src/domain src/core --exclude='assert.ts' || true
 grep -rn 'isValid' src/domain src/core || true
+grep -rnE '[A-Za-z0-9_)}\]]![^=]' src/domain src/core --include='*.ts' || true
 ```
 
 ## Decisiones condicionales
@@ -143,6 +157,8 @@ Sostiene `as` con ESLint `no-restricted-syntax` sobre `TSAsExpression` con allow
 | "Un `bool isPaid` basta" | El orden se puede olvidar; el type-state no compila mal |
 | "`as Email` aqui nunca falla" | Si es input de usuario, retorna `Result`; reserva `as` al smart constructor |
 | "Repito `safeParse` por seguridad" | En hot path parsea una vez y pasa el brand sin revalidar |
+| "`emailToString` libre basta; no interpolo PII por disciplina" | Clase opaca `CustomerEmail` redactada, sin coercion a `string` (`TS2345`) |
+| "`maybe!` aqui nunca es undefined" | `no-non-null-assertion` mas `no-restricted-syntax` para `as`; unwrap como error de lint |
 
 ## Referencias de un nivel
 

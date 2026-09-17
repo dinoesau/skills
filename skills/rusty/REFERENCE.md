@@ -16,6 +16,7 @@ Lee solo la seccion que necesites para la tarea actual.
 - [8. Ingenieria avanzada: Ref zero-cost y proptest](#8-ingenieria-avanzada-ref-zero-cost-y-proptest)
 - [9. Arquitectura: functional core, imperative shell](#9-arquitectura-functional-core-imperative-shell)
 - [10. Tabla defensive vs type-driven](#10-tabla-defensive-vs-type-driven)
+- [Apendice A: lints del compilador como invariantes](#apendice-a-lints-del-compilador-como-invariantes)
 - [11. Reglas de oro y bibliografia](#11-reglas-de-oro-y-bibliografia)
 
 ## 1. Antipatron del Rust defensivo
@@ -391,6 +392,66 @@ Los tipos ya lo probaron.
 Los accesores `as_str` y `Display` son intencionales.
 Quien llama puede leer el valor pero no forjarlo.
 Eso es encapsulacion sin costo de runtime.
+
+### Secret newtypes: redaccion de PII por tipo, no por disciplina
+
+`Email` prueba forma, pero su `Display` y su `AsRef<str>` hacen de cada `tracing::error!(email = %email)` una fuga de PII que compila.
+La redaccion por comentario no sobrevive al proximo contribuidor.
+Envuelve PII en el borde en un tipo sin escotillas de formato.
+
+```rust
+// src/domain/email.rs, mismo modulo que Email para alcanzar el campo privado.
+pub struct CustomerEmail(Email);
+
+impl CustomerEmail {
+    // Sin Display, sin AsRef<str>, sin Deref. Solo escotillas explicitas:
+    pub fn expose_for_sending(&self) -> &str {
+        self.0.as_str()
+    }
+
+    pub fn redacted(&self) -> &'static str {
+        "[redacted]"
+    }
+}
+
+// Debug redactado a mano: un Debug derivado imprimiria el Email interno.
+impl std::fmt::Debug for CustomerEmail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CustomerEmail([redacted])")
+    }
+}
+
+impl From<Email> for CustomerEmail {
+    fn from(email: Email) -> Self {
+        Self(email)
+    }
+}
+```
+
+`format!("{email}")` sigue valido para `Email` en contextos no-PII como recibos.
+`format!("{customer}")` falla con `E0277` porque `CustomerEmail` no implementa `Display`.
+El log solo puede imprimir `[redacted]` salvo que el call site pida `expose_for_sending()`.
+
+Para passwords y tokens, suma higiene de memoria con `secrecy` mas `zeroize`.
+Agrega `secrecy = "0.8"` y `zeroize = "1"` a `Cargo.toml`.
+
+```rust
+use secrecy::{ExposeSecret, SecretString};
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct PlainPassword(SecretString);
+
+impl PlainPassword {
+    pub fn expose_for_hashing(&self) -> &str {
+        self.0.expose_secret()
+    }
+}
+```
+
+`ZeroizeOnDrop` limpia el secreto de memoria al dropear. (`SecretString` ya redacta `Debug`.)
+Guarda `Email` para validacion de forma y `CustomerEmail` para manejo de PII.
+Parsea una vez a `Email`, envuelve una vez en `CustomerEmail` y deja que el compilador rechace el log accidental.
 
 ## 4. Pilar 2: ADTs y funciones totales
 
@@ -1165,7 +1226,7 @@ pub async fn refund_handler(
     Json(raw): Json<RefundRequestDto>,
 ) -> Result<impl IntoResponse, AppError> {
     use crate::domain::cents::Cents;
-    use crate::domain::email::Email;
+    use crate::domain::email::{CustomerEmail, Email};
     use crate::domain::order_id::OrderId;
     // 1. Parsear en el borde antes de tocar DB.
     // Forma invalida es InvalidOrderId 400.
@@ -1173,7 +1234,9 @@ pub async fn refund_handler(
     // Email malformado rechaza antes de tocar DB.
     // Email de DB sigue autoritativo; email del request prueba forma, no identidad.
     let order_id = OrderId::parse(&raw.order_id).map_err(DomainError::InvalidOrderId)?;
-    let _request_email = Email::parse(&raw.email).map_err(DomainError::InvalidEmail)?;
+    // Envuelto de inmediato: CustomerEmail no tiene Display, asi que el log accidental no compila.
+    let _request_email =
+        CustomerEmail::from(Email::parse(&raw.email).map_err(DomainError::InvalidEmail)?);
     let amount = Cents::parse(raw.amount_cents).map_err(DomainError::InvalidAmount)?;
 
     // 2. Cargar estado persistente via el puerto.
@@ -1207,7 +1270,8 @@ impl IntoResponse for AppError {
         let (status, message) = match &self {
             Self::Domain(err) => {
                 // Nunca dupliques la tabla de arriba: el status sale de refund_status_code.
-                // Nunca loguees email crudo via Display aqui; el brazo infra abajo redacta.
+                // La identidad del request viaja como CustomerEmail, sin Display:
+                // tracing::error!(email = %email) no compila aqui. Solo ids en logs.
                 (crate::domain::error::refund_status_code(err), err.to_string())
             }
             Self::Database(e) => {
@@ -1230,7 +1294,7 @@ impl IntoResponse for AppError {
 }
 ```
 
-Notas de produccion: exige `Idempotency-Key` en POST /refund con dedup para que reintentos nunca cobren doble. Emite contador `refund_total{kind}` e histograma de latencia con spans request_id/order_id. Nunca loguees email crudo ni DSNs via Display. Manten `calculate_refund` sync y rapido; `EmailRef` debe promoverse a owned antes de cualquier await para que futures sean 'static + Send. Testing limpio: `calculate_refund` con structs planos sin mocks; handler con `InMemoryOrderRepo` mas `tower::ServiceExt::oneshot` y payloads JSON reales. Cambia el adapter sin tocar el core porque el handler solo depende del trait.
+Notas de produccion: exige `Idempotency-Key` en POST /refund con dedup para que reintentos nunca cobren doble. Emite contador `refund_total{kind}` e histograma de latencia con spans request_id/order_id. Nunca loguees CustomerEmail ni DSNs: CustomerEmail no expone Display por diseño, asi que solo spans request_id/order_id en logs. Manten `calculate_refund` sync y rapido; `EmailRef` debe promoverse a owned antes de cualquier await para que futures sean 'static + Send. Testing limpio: `calculate_refund` con structs planos sin mocks; handler con `InMemoryOrderRepo` mas `tower::ServiceExt::oneshot` y payloads JSON reales. Cambia el adapter sin tocar el core porque el handler solo depende del trait.
 
 El testing se divide limpio.
 Prueba `calculate_refund` con structs planos y sin mocks.
@@ -1255,6 +1319,51 @@ Si una fila se mueve a la izquierda, regresa la prueba al tipo.
 | Costo en hot path | Newtypes `String` clonados en cada capa | `EmailRef<'a>` prestado sin heap, promote a owned una vez | Prueba sin impuesto de performance |
 | Testing | `#[test]` hechos a mano con pocos literales | `proptest` con miles de inputs Unicode mas shrinking | Confianza matematica en parsers, reproductores minimos |
 <| Arquitectura | Handlers mezclan Serde, sqlx y reglas con `async` en todos lados | Core puro sync con `calculate_refund` mas shell Axum delgado tras puerto `OrderRepository` (`SqlxOrderRepo` prod, `InMemoryOrderRepo` tests) | Core testeable y portable, efectos aislados, adaptador intercambiable y auditables |
+| Secretos | `Email` con `Display` logueado via `%email` por disciplina | `CustomerEmail` sin `Display` mas `secrecy`/`zeroize` para tokens | Fugas de PII como errores de compilacion, secretos limpiados al dropear |
+| Lints | "`unwrap` nunca" exigido por comentarios de review | `forbid(unsafe_code)` mas `deny(clippy::unwrap_used, clippy::panic)` y `#[must_use]` | Disciplina como fallos de build, backdoors `Deref` baneados |
+
+## Apendice A: lints del compilador como invariantes
+
+La regla 5 dice llevar invariantes al compilador, pero type-state mas este header son los unicos invariantes verificados por maquina en esta guia.
+El invariante mas barato es un header de lints en la raiz del crate.
+
+```rust
+// src/lib.rs o src/main.rs, antes de cualquier item.
+#![forbid(unsafe_code)]
+#![deny(missing_docs)]
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+#![deny(clippy::panic)]
+```
+
+`clippy::unwrap_used` y `clippy::expect_used` convierten la regla "retorna `Result`, nunca `unwrap`" de comentario en fallo de build.
+`clippy::panic` banea `panic!` fuera de tests.
+`forbid(unsafe_code)` rechaza `unsafe` en tu crate sin tocar dependencias.
+`deny(missing_docs)` obliga a documentar cada item publico nuevo, incluidos `CustomerEmail` y sus escotillas.
+
+Acota el rigor donde viven los fixtures.
+Los ejemplos de esta guia usan `.expect("fixture is valid")` para bootstrap de tests.
+Permitelo ahi y en ningun otro lado.
+
+```rust
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests { /* ... */ }
+```
+
+Dos reglas mas completan el header.
+Marca accesores de valor con `#[must_use]` para que la prueba descartada avise.
+
+```rust
+#[must_use]
+pub fn value(self) -> u64 {
+    self.0
+}
+```
+
+(`parse` no necesita atributo porque `Result` ya es `#[must_use]`.)
+Y nunca implementes `Deref<Target = str>` para newtypes.
+`Deref` re-expone cada metodo de `str` en silencio y debilita el borde que el modulo se construyo para imponer.
+Implementa `AsRef<str>` y `Display` de forma deliberada por tipo.
 
 ## 11. Reglas de oro y bibliografia
 

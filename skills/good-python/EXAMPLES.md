@@ -155,7 +155,7 @@ def charge_once(raw_amount: object) -> None:
     apply_charge(parsed.value)
 ```
 
-<## 9. Driver hardwireado vs `OrderRepository` (local preservado)
+## 9. Driver hardwireado vs `OrderRepository` (local preservado)
 
 Before: el handler fabrica `OrderSnapshot` desde el request.
 After: el puerto carga persistencia real y el core no cambia.
@@ -218,4 +218,34 @@ After: puerto `Protocol` + `Depends` + fake in-memory, `OrderId.parse -> Invalid
 ```python
 # After: ver REFERENCE.md#9-arquitectura-functional-core-imperative-shell.
 # `loaded = await repo.find(order_id.value)`; `None` es 404, `DbError` es 500.
+```
+
+## 13. `Email` logueable vs `CustomerEmail` redactado
+
+Before: cada f-string es una fuga de PII que corre.
+After: el log accidental imprime `[redacted]`.
+
+```python
+# Before: fuga que corre.
+def notify_parsed(email: Email) -> None:
+    print(f"sending to {email}")
+
+# After: redactado por defecto; crudo solo en el borde de envio.
+def notify_customer(customer: CustomerEmail) -> None:
+    print(f"sending to {customer}")  # sending to [redacted]
+    send(customer.expose_for_sending())
+```
+
+## 14. Review por disciplina vs lints como invariantes
+
+Before: "no construir directo" exigido por review; `ruff check .` pasa con `Email(_value="x")` fuera del modulo.
+After: la config concreta lo convierte en fallo del checker.
+
+```toml
+# After: pyproject.toml minimo.
+[tool.mypy]
+strict = true
+
+[tool.ruff.lint]
+select = ["SLF"]
 ```
