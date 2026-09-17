@@ -27,6 +27,7 @@ Esperado:
 - [ ] `AppError` envuelve infra una vez con `cause`; logs solo en el edge.
 - [ ] 400, 404 o 422 por variante de dominio; 500 generico para infra.
 - [ ] Agregar una variante rompe el `switch` en compilacion via `assertNever`.
+- [ ] El handler es `createRefundHandler({ repo, policy })`; `PostgresOrderRepository` solo en prod y `InMemoryOrderRepository` en tests HTTP; driver que lanza es `Database` 500 y `null` es `UserNotFound` 404; nunca fabrica `Order` desde el request.
 
 ## Escenario 3: type-state en workflow ordenado
 

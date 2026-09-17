@@ -146,7 +146,39 @@ export function chargeOnce(rawAmount: unknown): void {
 }
 ```
 
-## 8. Payload stringly vs brands `LastFour` / `Iban`
+<## 8. Driver hardwireado vs `OrderRepository` (variante nullable local)
+
+Before: el handler importa el driver y fabrica el balance.
+After: la factory recibe el puerto y carga persistencia real.
+
+```ts
+// Before: acoplado y sin 404 real.
+const refund = calculateRefund(
+  { orderId: orderId.value, balance: mintCentsUnchecked(10_000), alreadyRefunded: false },
+  amount.value, { maxCents: mintCentsUnchecked(500_000) },
+);
+
+// After: puerto con 404 y 500 tipados, variante nullable.
+// Canonico en REFERENCE usa Result<OrderSnapshot, AppError>; esta variante usa null para codebases pequenos.
+export interface OrderRepositoryNullable {
+  find(orderId: OrderId): Promise<OrderSnapshot | null>;
+}
+
+export function createRefundHandler(deps: { repo: OrderRepositoryNullable; policy: RefundPolicy }): Hono {
+  const app = new Hono();
+  app.post("/refund", async (c) => {
+    // parse borde aqui, luego:
+    // const order = await deps.repo.find(orderId.value).catch((cause) => { throw { kind: "Database", cause }; });
+    // if (order === null) return c.json({ error: "user not found" }, 404);
+    // return calculateRefund(order, amount.value, deps.policy);
+  });
+  return app;
+}
+
+// Prod usa PostgresOrderRepository, tests usan InMemoryOrderRepository con seed.
+```
+
+## 9. Payload stringly vs brands `LastFour` / `Iban`
 
 Before: cualquier string pasa como metodo de pago.
 After: solo valores parseados llegan al core.
@@ -165,7 +197,7 @@ export function payWith(method: PaymentMethod): number {
 }
 ```
 
-## 9. Status `number` vs `HttpStatus` cerrado
+## 10. Status `number` vs `HttpStatus` cerrado
 
 Before: `domainToStatus` retorna `number`, `return 999` compila.
 After: tabla unica `HttpStatus = 400 | 404 | 422 | 500`, `return 999` falla en `tsc --strict`.
@@ -178,10 +210,10 @@ export function statusFor(e: DomainError): HttpStatus {
 }
 ```
 
-## 10. Snapshot inline vs puerto `OrderRepository`
+## 11. Snapshot inline vs puerto `OrderRepository` (canonico Result)
 
 Before: handler fabrica `{ balance: mintCentsUnchecked(10_000) }` inline.
-After: carga via puerto, `null` es `UserNotFound` 404 y `throw` es `Database` 500.
+After: carga via puerto, `Result` distingue `UserNotFound` 404 y `Database` 500.
 
 ```ts
 // After: factory con adapters Postgres e in-memory.

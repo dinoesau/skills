@@ -1090,10 +1090,15 @@ pub struct RefundResponseDto {
 }
 ```
 
-El handler de Axum une los dos mundos y nada mas. Desacoplalo con puerto trait en la capa app: solo habla tipos de dominio. El shell provee el adapter y Axum lo inyecta via `State`.
+<El handler de Axum une los dos mundos y nada mas.
+Desacopla la infra con un puerto trait en la capa app.
+El puerto solo habla tipos de dominio.
+El shell provee el adaptador y Axum lo inyecta via `State`.
+Sin logica de negocio aqui.
+La API de `calculate_refund` no cambia.
 
 ```rust
-// src/app/ports.rs
+// src/app/ports.rs: puerto hexagonal, solo tipos de dominio.
 use crate::domain::order::Order;
 use crate::domain::order_id::OrderId;
 
@@ -1117,7 +1122,9 @@ pub struct AppState {
     pub policy: RefundPolicy,
 }
 
-// src/shell/sqlx_repo.rs
+// src/shell/sqlx_repo.rs: un adaptador tras el puerto.
+// Las filas SQL re-entran al dominio via OrderId::parse y amigos.
+// Mapea la fila con OrderId::parse y amigos, para que filas DB re-entren parseadas.
 pub struct SqlxOrderRepo {
     pool: sqlx::PgPool,
 }
@@ -1160,12 +1167,17 @@ pub async fn refund_handler(
     use crate::domain::cents::Cents;
     use crate::domain::email::Email;
     use crate::domain::order_id::OrderId;
-    // 1. Parsear en el borde. Email malformado rechaza antes de tocar DB.
+    // 1. Parsear en el borde antes de tocar DB.
+    // Forma invalida es InvalidOrderId 400.
+    // Fila faltante es UserNotFound 404.
+    // Email malformado rechaza antes de tocar DB.
     // Email de DB sigue autoritativo; email del request prueba forma, no identidad.
     let order_id = OrderId::parse(&raw.order_id).map_err(DomainError::InvalidOrderId)?;
     let _request_email = Email::parse(&raw.email).map_err(DomainError::InvalidEmail)?;
     let amount = Cents::parse(raw.amount_cents).map_err(DomainError::InvalidAmount)?;
-    // 2. Cargar estado persistido via puerto. Nunca fabricar Order desde el monto del request.
+
+    // 2. Cargar estado persistente via el puerto.
+    // Nunca fabricar Order desde el amount del request.
     let order = state
         .repo
         .find(&order_id)
@@ -1173,7 +1185,9 @@ pub async fn refund_handler(
         .map_err(AppError::Database)?
         .ok_or(DomainError::UserNotFound)?;
     let refund = calculate_refund(&order, amount, &state.policy)?;
-    // 3. Mapear a DTO. Sin logica de negocio aqui.
+
+    // 3. Mapear a DTO.
+    // Sin logica de negocio aqui.
     // OrderId a String necesita as_str().to_owned(). Nunca muevas el newtype sin convertir.
     let body = RefundResponseDto {
         order_id: refund.order_id.as_str().to_owned(),
@@ -1220,8 +1234,9 @@ Notas de produccion: exige `Idempotency-Key` en POST /refund con dedup para que 
 
 El testing se divide limpio.
 Prueba `calculate_refund` con structs planos y sin mocks.
-Prueba el handler con `tower::ServiceExt::oneshot` y payloads JSON reales.
-El core queda rapido y determinista porque los efectos viven solo en el shell.
+Prueba el handler con `InMemoryOrderRepo` mas `tower::ServiceExt::oneshot` y payloads JSON reales.
+Cubre JSON malformado, email malo, monto negativo, fila faltante 404 y doble refund.
+Intercambia el adaptador sin tocar el core porque el handler solo depende del trait.
 
 ## 10. Tabla defensive vs type-driven
 
@@ -1239,7 +1254,7 @@ Si una fila se mueve a la izquierda, regresa la prueba al tipo.
 | Estado de workflow | Flags como `is_paid` con `if` antes de cada accion | Type-state `StagedOrder<Draft>` a `StagedOrder<Paid>` con move semantics | Transiciones ilegales no compilan, handles rancios se destruyen |
 | Costo en hot path | Newtypes `String` clonados en cada capa | `EmailRef<'a>` prestado sin heap, promote a owned una vez | Prueba sin impuesto de performance |
 | Testing | `#[test]` hechos a mano con pocos literales | `proptest` con miles de inputs Unicode mas shrinking | Confianza matematica en parsers, reproductores minimos |
-| Arquitectura | Handlers mezclan Serde, DB y reglas con `async` en todos lados | Core puro sync con `calculate_refund` mas shell Axum y Serde delgado tras puerto `OrderRepository` | Core testeable y portable, efectos aislados y auditables |
+<| Arquitectura | Handlers mezclan Serde, sqlx y reglas con `async` en todos lados | Core puro sync con `calculate_refund` mas shell Axum delgado tras puerto `OrderRepository` (`SqlxOrderRepo` prod, `InMemoryOrderRepo` tests) | Core testeable y portable, efectos aislados, adaptador intercambiable y auditables |
 
 ## 11. Reglas de oro y bibliografia
 

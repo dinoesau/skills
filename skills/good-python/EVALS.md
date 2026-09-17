@@ -17,6 +17,7 @@ Esperado:
 - [ ] `mypy --strict .`, `ruff check .` y `pytest` pasan.
 - [ ] Ningun grep de fuga imprime lineas fuera de lugar (`model_validate` nunca en dominio/core, `isinstance` solo en `parse_*` y railway, `raise` solo en validador que se convierte a `Result`).
 - [ ] Adversarial: JSON malformado `"invalid request"` 400 sin `exc.errors()`, email malo 400, monto negativo 400, `orderId` malformado `InvalidOrderId` 400 vs `UserNotFound` 404, doble refund `AlreadyRefunded` 422, exceso `ExceedsMax` 422.
+- [ ] El handler inyecta `OrderRepository` con `Depends(get_order_repository)`; `PostgresOrderRepository` solo en prod y `InMemoryOrderRepository` via `dependency_overrides` en tests; nunca fabrica `OrderSnapshot` desde el request.
 
 ## Escenario 2: errores estratificados
 

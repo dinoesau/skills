@@ -125,6 +125,9 @@ Si es un solo booleano sin orden, no uses type-state.
 Si el hot path ya tiene el valor probado, pasa el value object sin revalidar.
 Si debes mecanizar reglas repetidas, usa decorador que deje la regla visible en el modulo de dominio.
 Si la forma es valida pero la fila falta en DB, retorna `UserNotFound` 404; si la forma es invalida, retorna `InvalidOrderId` 400.
+Si cargas estado persistente, usa puerto `OrderRepository` con `Depends(get_order_repository)`; nunca hardwirees el driver en el handler.
+Si el repo retorna `Err(DbError)`, mapea a 500 generico; si retorna `Ok(None)`, mapea a `UserNotFound` 404.
+Si testeas el handler, usa `InMemoryOrderRepository` via `dependency_overrides`; reserva `PostgresOrderRepository` para prod.
 Pydantic vive solo en DTOs shape-only del shell; el dominio nunca importa `BaseModel`; nunca retornes `exc.errors()` al cliente, usa `"invalid request"` generico.
 `DbError`/`GatewayError` guardan `cause: Exception`, no `str`, para preservar traceback y retry.
 

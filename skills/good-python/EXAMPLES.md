@@ -155,7 +155,31 @@ def charge_once(raw_amount: object) -> None:
     apply_charge(parsed.value)
 ```
 
-## 9. Payload stringly vs `LastFour` / `Iban`
+<## 9. Driver hardwireado vs `OrderRepository` (local preservado)
+
+Before: el handler fabrica `OrderSnapshot` desde el request.
+After: el puerto carga persistencia real y el core no cambia.
+
+```python
+# Before: acoplado y sin 404 real.
+order = OrderSnapshot(order_id=shaped.order_id, balance=Cents._mint_after_check(10_000), already_refunded=False)
+
+# After: puerto con 404 y 500 tipados.
+class OrderRepository(Protocol):
+    async def find(self, order_id: OrderId) -> Result[OrderSnapshot | None, DbError]:
+        ...
+
+async def refund_handler(request: Request, repo: Annotated[OrderRepository, Depends(get_order_repository)]) -> JSONResponse:
+    # parse borde aqui, luego:
+    # loaded = await repo.find(order_id.value)
+    # if isinstance(loaded, Err): return JSONResponse({"error": "internal error"}, status_code=500)
+    # if loaded.value is None: return JSONResponse({"error": "user not found"}, status_code=404)
+    # return calculate_refund(loaded.value, amount.value, policy)
+
+# Prod usa PostgresOrderRepository, tests usan InMemoryOrderRepository via dependency_overrides.
+```
+
+## 10. Payload stringly vs `LastFour` / `Iban`
 
 Before: `last_four: str` acepta `"12"`.
 After: solo valores parseados llegan al core.
@@ -174,7 +198,7 @@ def fee_for_typed(method: PaymentMethod) -> int:
     return fee_for(method)  # exhaustivo via assert_never
 ```
 
-## 10. Status `int` vs `HttpStatus` cerrado
+## 11. Status `int` vs `HttpStatus` cerrado
 
 Before: `domain_to_status -> int`, `= 999` pasa.
 After: `HttpStatus = Literal[400, 404, 422, 500]`, `= 999` falla `[assignment]`.
@@ -186,7 +210,7 @@ def status_for(error: DomainError) -> HttpStatus:
     return domain_to_status(error)
 ```
 
-## 11. Snapshot inline vs puerto `OrderRepository`
+## 12. Snapshot inline vs puerto `OrderRepository` (canonico)
 
 Before: handler fabrica `OrderSnapshot(..., balance=_mint_after_check(10_000))` inline y usa `UserId.parse` para `order_id`.
 After: puerto `Protocol` + `Depends` + fake in-memory, `OrderId.parse -> InvalidOrderId` 400, `None -> UserNotFound` 404.

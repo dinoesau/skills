@@ -128,6 +128,9 @@ Si es un solo booleano sin orden, no uses type-state.
 Si el hot path solo presta el valor, pasa el brand por referencia sin reparsear.
 Si debes derivar schemas, extiende con `extend` o `pick` en vez de copiar campos.
 Si la forma es valida pero la fila falta en DB, retorna `UserNotFound` 404; si la forma es invalida, retorna `InvalidOrderId` 400.
+Si cargas estado persistente, usa puerto `OrderRepository` con factory `createRefundHandler({ repo, policy })`; nunca hardwirees el driver en el handler.
+Si el driver lanza, mapea a `Database` 500; si retorna `null`, mapea a `UserNotFound` 404.
+Si testeas el handler, usa `InMemoryOrderRepository` con payloads HTTP reales; reserva `PostgresOrderRepository` para prod.
 Si el ciclo es en memoria usa `StagedOrder`; si es persistencia across restarts usa flag `alreadyRefunded`; usa ambos, no uno u otro.
 Sostiene `as` con ESLint `no-restricted-syntax` sobre `TSAsExpression` con allowlist `domain/*`; exige `strict` + `noUncheckedIndexedAccess` + `declaration:true`.
 

@@ -151,25 +151,48 @@ let view = EmailRef::parse("user@example.com")?;
 let owned: Email = view.to_owned_email();
 ```
 
-## 8. Core puro vs handler delgado
+## 8. Core puro vs handler delgado con puerto
 
 El core no toca IO ni `async`.
-El shell parsea, llama y mapea.
+El shell parsea, carga via puerto, llama y mapea.
+La API de `calculate_refund` no cambia.
 
 ```rust
 // Core: testeable sin mocks.
 let refund = calculate_refund(&order, requested, &policy)?;
 
-// Shell: parsea en el borde y retorna DTO.
+// Shell: parsea en el borde, carga persistencia via puerto.
 // Forma invalida es InvalidOrderId 400; fila faltante es UserNotFound 404.
+// Driver caido es Database 500 via AppError.
 // Carga via trait `OrderRepository` con `State(AppState)`, `None -> UserNotFound`, `Err -> Database`.
+pub struct AppState {
+    pub repo: std::sync::Arc<dyn OrderRepository>,
+    pub policy: RefundPolicy,
+}
+
 let order_id = OrderId::parse(&raw.order_id).map_err(DomainError::InvalidOrderId)?;
 let _request_email = Email::parse(&raw.email).map_err(DomainError::InvalidEmail)?;
 let amount = Cents::parse(raw.amount_cents).map_err(DomainError::InvalidAmount)?;
 let order = state.repo.find(&order_id).await.map_err(AppError::Database)?.ok_or(DomainError::UserNotFound)?;
+let refund = calculate_refund(&order, amount, &state.policy)?;
 ```
 
-## 9. Payment con campos publicos vs privados + `parse`
+## 9. sqlx hardwireado vs `OrderRepository`
+
+Before: el handler importa sqlx y no se puede testear sin DB.
+After: el trait vive en app, `SqlxOrderRepo` va a prod y `InMemoryOrderRepo` a tests con `oneshot`.
+
+```rust
+// Before: acoplado.
+async fn refund_handler(pool: sqlx::PgPool) { /* SELECT directo aqui */ }
+
+// After: puerto.
+pub trait OrderRepository: Send + Sync + 'static {
+    async fn find(&self, id: &OrderId) -> Result<Option<Order>, sqlx::Error>;
+}
+```
+
+## 10. Payment con campos publicos vs privados + `parse`
 
 Before: `pub last_four: String` compila verbatim.
 After: campo privado, `E0308` si pasas `&str` donde va `CardDetails`.
