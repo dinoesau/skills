@@ -161,13 +161,14 @@ Read the plan file section, wave spec, and state file section listed in Context 
 
 Reply with exactly:
 1. Summary (2-3 lines): the real problem and the main goal for this lane.
-2. Skills to load: file paths from Required skills you will read, or `none`.
+2. Skills to load: skill IDs from Required skills you will load via the skill tool (e.g. `Load the skill with id `good-python` using the skill tool.`), or `none`. After loading, read REFERENCE.md and EVALS.md from the reported skill base directory, EXAMPLES.md as support, and list what you loaded.
 3. Critical points and edge cases you detect.
 4. Confirmation that you are ready to start. Do not edit any file yet.
 ```
 
 Rules:
 
+- Load skills via the skill tool, never by `Read` alone. `Read` on a SKILL.md path does not register a session load and hides supporting files. Fallback to direct `Read` of SKILL.md plus REFERENCE.md, EXAMPLES.md, and EVALS.md only when the skill tool denies access; log the fallback in the readiness reply.
 - One readiness round only. If the summary is wrong, the coordinator corrects scope and re-spawns or aborts the lane; do not debate across rounds.
 - Allowed files are limited to the Files column for this lane. Anything else is out of scope.
 - After readiness passes, the coordinator replies with explicit `GO`. Only then may the lane start the retry loop.
@@ -261,21 +262,28 @@ Same `counter` prompt as above on the full branch diff. Refutes the complete cha
 
 ### Tier 2b language standard (final gate)
 
-One lane per language touched by the diff, run in parallel. The lane reads the skill file directly by path; auto-trigger phrases do not apply here.
+One lane per language touched by the diff, run in parallel. The lane loads the skill via the skill tool; auto-trigger phrases do not apply here. Verified invocation: `Load the skill with id `<skill-id>` using the skill tool.`
 
-| Diff touches | Skill file the lane must read |
-|--------------|-------------------------------|
-| `*.py` | `.agents/skills/good-python/SKILL.md` |
-| `*.ts`, `*.tsx` | `.agents/skills/good-typescript/SKILL.md` |
-| `*.rs` | `.agents/skills/rusty/SKILL.md` |
+| Diff touches | Skill ID | Fallback skill file |
+|--------------|----------|---------------------|
+| `*.py` | `good-python` | `.agents/skills/good-python/SKILL.md` |
+| `*.ts`, `*.tsx` | `good-typescript` | `.agents/skills/good-typescript/SKILL.md` |
+| `*.rs` | `rusty` | `.agents/skills/rusty/SKILL.md` |
 
 Lane prompt shape:
 
 ```
+Load the skill with id `<skill-id>` using the skill tool.
 Review this diff against the language skill.
-Skill file: <path from table above, first lane per language>
+Skill ID: <id from table above, one lane per language>
 Diff: <full branch diff>
+After loading, read REFERENCE.md and EVALS.md from the reported skill base directory (EXAMPLES.md as support) before writing findings.
 ```
+
+Rules:
+
+- Loading evidence is required: the lane must cite the skill ID loaded plus supporting files read. A verdict without that evidence is invalid and the coordinator re-spawns the lane.
+- Fallback to direct `Read` of SKILL.md plus REFERENCE.md and EVALS.md only when the skill tool denies access; log the fallback in the verdict.
 
 Rules:
 
