@@ -44,6 +44,7 @@ A list of implementation decisions that were made. This can include:
 - API contracts
 - Specific interactions
 - Dependency and concurrency: if parallel, include a Mermaid DAG of waves and a file-conflict analysis; if sequential, note why parallelism is not applicable
+- Dynamic workflow: DAG version (v1 at plan time), state file path `docs/plan-<slug>-state.md`, coordinator barrier procedure (merge state, run guardrails, Tier 1 counter review), and DAG mutation rules for runtime replans
 
 Express decisions as Mermaid diagrams when they map cleanly:
 
@@ -63,6 +64,7 @@ A list of testing decisions that were made. Include:
 - A description of what makes a good test (only test external behavior, not implementation details)
 - Which modules will be tested
 - Prior art for the tests (i.e. similar types of tests in the codebase)
+- Adversarial review: Tier 1 counter review after each wave barrier on the wave diff, Tier 2 before merge on the full branch diff, both blocking with `pass / fail + findings` stored in the state file
 
 ## Out of Scope
 

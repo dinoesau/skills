@@ -5,7 +5,8 @@ Replace every <placeholder>.
 Delete sections marked (conditional) when they do not apply.
 Delete every HTML comment, including this one, from the final plan. -->
 
-> Generated: <YYYY-MM-DD> | Base commit: <output of `git rev-parse --short HEAD`>
+> Generated: <YYYY-MM-DD> | Base commit: <output of `git rev-parse --short HEAD`> | DAG: v1
+> State file: `docs/plan-<slug>-state.md` - the live runtime record. This plan file stays frozen; all barrier merges, DAG mutations, retry evidence, and counter verdicts append to the state file.
 
 ## Required skills
 
@@ -49,24 +50,32 @@ per the Diagrams section in PRD-TEMPLATE.md. -->
 ### Context to load first
 
 - Skill files listed above
-- Files to be modified (read before editing)
+- Files to be modified (read-only for the coordinator; only lanes edit)
 - Key types and interfaces
 - Existing tests as style and pattern reference
 
+**Coordinator is read-only on source code:**
+
+- The coordinator NEVER runs Edit or Write on source files, NEVER runs fix commands itself, NEVER performs browser clicks itself.
+- The only file the coordinator writes is `docs/plan-<slug>-state.md` during barrier merges plus the DAG log.
+- All code changes, test runs for fixes, and browser interactions happen inside lanes or counter subagents.
+
 **Do NOT:**
 
-- Modify files outside those listed
+- Modify files outside those listed (coordinator: do not modify any source file at all)
 - Refactor unrelated code
 - Assume conventions that are not present in the codebase
+- Execute an Implementation step directly instead of spawning a lane subagent (except the trivial single-step exception below)
 
 ### If an instruction cannot be executed as written
 
 Detailed instructions are brittle, and the codebase may have moved past the plan's base commit (see header).
-If a step cannot be executed exactly as written (file renamed, API changed, missing dependency):
+The coordinator owns recovery: log the discrepancy in the state file, apply the smallest DAG mutation that unblocks progress, bump the DAG version, and continue.
 
-1. Do NOT improvise an alternative silently.
-2. If the mismatch is trivial (e.g. a slightly different file path), adapt, continue, and note it.
-3. Otherwise stop, report the discrepancy, and ask how to proceed.
+1. Log the mismatch in the state file (expected vs actual, files involved).
+2. If the mismatch is trivial (e.g. a slightly different file path), adapt, continue, and note it in the state file.
+3. Otherwise apply a DAG mutation per the DAG mutation rules, record reason + DAG diff + affected waves, and continue.
+4. Only stop and ask when guardrails, evals, and counter review all fail to produce a safe path. Never improvise silently without logging.
 
 ### Project commands
 
@@ -88,11 +97,11 @@ Do not assume a stack: this repo has both a TypeScript frontend and a Python bac
 | Max parallelism | <N workers, default 3> |
 | Isolation | shared-branch | worktree-per-worker |
 
-> If `Mode` is `sequential`, ignore the Waves table and use flat Implementation steps as today. If `parallel`, fill every section below; do not leave placeholders.
+> Waves always exist. Sequential means `Max parallelism: 1` (one lane at a time), not direct execution by the coordinator. Fill every section below; do not leave placeholders. Exception: a trivial single-step single-file plan may run directly without lanes, but must state why delegation overhead is not justified.
 
 ### Dependency graph
 
-<!-- Required for parallel plans. Leaf nodes at top. Edges = depends_on. Mark file-conflict edges dashed. For sequential plans write: Not applicable - sequential plan. -->
+<!-- Required for all plans. Leaf nodes at top. Edges = depends_on. Mark file-conflict edges dashed. Sequential plans use single-lane waves with Max parallelism 1. -->
 
 ```mermaid
 graph TD
@@ -100,6 +109,15 @@ graph TD
     W1B[Step 2: UI component<br/>files: src/App.tsx] --> W2A
     W2A --> W3[Step 4: integration tests<br/>files: tests/ - global]
 ```
+
+> DAG version: v1 at plan time. Runtime mutations append v2, v3, ... to the state file DAG log. Never edit this frozen graph; record mutations in the state file.
+
+### DAG log (runtime, in state file)
+
+| Version | Reason | Diff | Affected waves |
+|---------|--------|------|----------------|
+| v1 | Initial plan | - | All |
+| <v2> | <e.g. Step 3 split after API surface grew> | <moved Step 3b to Wave 2b> | <Wave 2> |
 
 ### File conflict matrix
 
@@ -111,7 +129,7 @@ graph TD
 
 > No two parallel steps may touch the same file. If they do, sequentialize into sub-waves or split the file. Verify with `grep` on the Files column.
 
-### Waves (only if parallel)
+### Waves (always, even when sequential)
 
 | Wave | Steps | Parallelizable | Depends on | Sub-agent assignment | Barrier guardrail |
 |------|-------|----------------|------------|----------------------|-------------------|
@@ -119,21 +137,74 @@ graph TD
 | 2 | 3 | no | Wave 1 | `general` | `tests` pass |
 | 3 | 4 | yes (N lanes) | Wave 2 | `general x2` | `integration + lint` |
 
-> Each lane is one `subagent` tool call with `background:true`. The coordinator waits at the barrier before starting the next wave. See Context to load per wave.
+> Each lane is one `subagent` tool call with `background:true`. The coordinator runs the barrier protocol before starting the next wave: merge lane outputs into the state file, run barrier guardrails, spawn Tier 1 counter review, then proceed or replan. See Coordinator protocol and Context to load per wave.
 
 ### Context to load per wave
 
-<!-- Only for parallel plans. Each worker gets minimal context: its wave's files + key types + one example test. Shared context merges at barriers. For sequential plans write: Not applicable. -->
+<!-- Every wave gets minimal context per lane: its wave's files + key types + one example test. Shared context merges at barriers. Sequential waves use one lane with Max parallelism 1. -->
 
 - Wave 1 Lane A (Step 1): `<files>`, `<key types>`, `<example test>`
 - Wave 1 Lane B (Step 2): `<files>`, `<key types>`, `<example test>`
 - Shared after Wave 1 barrier: `<integration tests, shared types>`
 
+### Lane kickoff gate (required for editing lanes)
+
+Two-phase start. Phase 1: readiness. Phase 2: GO. A lane must not edit any file before receiving GO.
+
+The coordinator spawns each editing lane with this prompt shape:
+
+```
+Goal: Implement Plan: `docs/plan-<slug>.md`, Wave <N> Lane <X> (Steps <...>)
+Role: Senior Software Engineer
+
+Read the plan file section, wave spec, and state file section listed in Context to load per wave before writing any code. Confirm we share the same understanding first.
+
+Reply with exactly:
+1. Summary (2-3 lines): the real problem and the main goal for this lane.
+2. Skills to load: file paths from Required skills you will read, or `none`.
+3. Critical points and edge cases you detect.
+4. Confirmation that you are ready to start. Do not edit any file yet.
+```
+
+Rules:
+
+- One readiness round only. If the summary is wrong, the coordinator corrects scope and re-spawns or aborts the lane; do not debate across rounds.
+- Allowed files are limited to the Files column for this lane. Anything else is out of scope.
+- After readiness passes, the coordinator replies with explicit `GO`. Only then may the lane start the retry loop.
+- Read-only `explore` lanes, `counter` reviews, and the trivial single-step exception skip this gate.
+
+### Coordinator protocol
+
+Barrier order is fixed. The coordinator is the only writer at barriers and NEVER implements steps itself:
+
+1. Collect lane outputs (files touched, commands run, eval results).
+2. Merge into `docs/plan-<slug>-state.md` per-wave sections. Lanes never merge shared context themselves.
+3. Run barrier guardrails + wave evals (read-only checks like `git diff`, test output review).
+4. Spawn Tier 1 counter review (blocking). On `fail`, apply a DAG mutation and replan before the next wave.
+5. Decide: proceed to next wave, replan on new DAG version, or stop and ask if no safe path exists.
+
+| Coordinator may | Coordinator must NOT |
+|-----------------|----------------------|
+| Read any file, run `git diff` / `git status` | Run Edit or Write on source files |
+| Spawn lane and `counter` subagents | Implement a step directly (except trivial single-step exception) |
+| Merge lane outputs into the state file | Merge code or resolve conflicts by hand |
+| Run read-only guardrail checks at barriers | Run fix commands or browser clicks itself |
+
+Every Implementation step runs inside exactly one lane subagent, even when `Max parallelism` is 1. No step is ownerless.
+
+### State file
+
+One Markdown file per plan: `docs/plan-<slug>-state.md`. Initialized at DAG v1 with one section per wave plus counter slots and DAG log. Per-wave section records inputs, files touched, key type surface, commands with output summary, eval results, retry count, and counter verdict. Append only; never rewrite history.
+
+### Lane retry loop
+
+Each lane runs act -> eval -> reflect -> fix, max 2 fix attempts. Each attempt logs validator output (typecheck, test, lint) into its state file section before retrying. Retries without evidence are not allowed. The third failure isolates the lane until the barrier; other lanes continue and the coordinator decides at the barrier.
+
 ### Implementation steps
 
 Each step has a **guardrail**: a verifiable condition that must hold before moving to the next step.
-If a guardrail fails, stop and report.
-For parallel plans, `Waves` defines which steps run concurrently and each lane's `subagent` assignment; lane failures isolate until the barrier (see Error budget). For sequential plans, steps are flat and `Waves` is `Not applicable`.
+If a guardrail fails, run the lane retry loop (act -> eval -> reflect -> fix, max 2 fix attempts, validator output logged to the state file). On the third failure isolate the lane until the barrier and let the coordinator decide.
+`Waves` defines which steps run in which lane and each lane's `subagent` assignment; the coordinator never executes steps itself. Sequential plans use single-lane waves with `Max parallelism: 1`; lane failures isolate until the barrier (see Error budget).
 
 <!-- Example row (delete):
 | 1 | Add `carpeta_id` to the Ticket model | source/app/models.py | `make -C source typecheck` reports no new errors |
@@ -148,7 +219,7 @@ For parallel plans, `Waves` defines which steps run concurrently and each lane's
 
 Define the eval before implementing the step.
 Each step has one or more evals proving the change works.
-For parallel plans, each eval runs after its wave's barrier unless it is lane-local (typecheck per lane).
+Each eval runs inside its lane or after its wave's barrier (lane-local typecheck may run before the barrier).
 
 <!-- Example row (delete):
 | 1 | A ticket saved with a carpeta_id reads back with the same carpeta_id | integration | `make -C source test` |
@@ -159,9 +230,34 @@ For parallel plans, each eval runs after its wave's barrier unless it is lane-lo
 | 1 | <test description> | unit / integration / e2e | <command> | Wave 1 barrier | 
 | 2 | ... | ... | ... | Wave 1 barrier or lane-local |
 
-> For sequential plans, `Run after` is `Step N` or `global`. Lane-local evals (e.g. `typecheck` per lane) may run before the barrier.
+> `Run after` is `Step N`, `Wave N barrier`, or `global`. Lane-local evals (e.g. `typecheck` per lane) may run before the barrier.
+
+### Counter review (Tier 1 per wave, Tier 2 before merge)
+
+Two tiers, both blocking. Tier 1 runs after each wave barrier on the wave diff. Tier 2 runs before merge on the full branch diff. A `fail` verdict blocks the next wave or the merge until the coordinator replans.
+
+The coordinator spawns one `counter` subagent per review with this prompt shape, filled from Docs for Humans and the current diff:
+
+```
+@counter review against current git diff
+Problem Statement:
+<copy Problem Statement from Docs for Humans verbatim>
+
+Solution:
+<copy Solution from Docs for Humans verbatim>
+
+Scope: <wave diff for Tier 1, full branch diff for Tier 2>
+```
+
+Rules:
+
+- Verdict format is `pass / fail + findings`, stored in the state file with file paths and line numbers.
+- Keep the review narrow: refute the diff against the stated problem and solution. No scope redesign; file scope questions as findings.
+- Tier 1 `fail` triggers a DAG mutation before the next wave. Tier 2 `fail` blocks the merge until fixed and re-reviewed.
 
 ### Browser validation (conditional: only if the change affects UI)
+
+The coordinator delegates this to a lane subagent. The coordinator itself never drives the browser.
 
 Use the agent's Playwright MCP browser tools: `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_take_screenshot`.
 Do NOT use `@playwright/test`.
@@ -183,39 +279,44 @@ Success criterion:
 
 At these points the agent must PAUSE and ask the user before continuing.
 Keep it to 1-3 checkpoints: each one interrupts the executor's autonomous flow.
-For parallel plans, use wave barriers as checkpoints.
+Use wave barriers as checkpoints.
 
 1. **After step <N>:** <what the user must confirm>
-2. **After Wave <N> barrier (only if parallel):** <all lanes in wave done, confirm merge or next wave>
+2. **After Wave <N> barrier:** <all lanes in wave done, confirm merge or next wave>
 3. **Before merge:** <final validation>
 
 ### Error budget
 
 Single source of truth for failure tolerance in this plan.
-For parallel plans, `Scope` distinguishes per-wave isolation from global fail-fast.
+`Scope` distinguishes per-wave isolation from global fail-fast. Sequential waves use per-wave scope with one lane.
 
 | Event | Scope | Limit | Action when exceeded |
 |-------|-------|-------|----------------------|
-| New or failing test | per-wave (parallel) / global (sequential) | 2 fix attempts | For per-wave: isolate lane, others continue to barrier, coordinator decides; for global: stop and report; never continue or declare done with failing tests |
+| New or failing test | per-wave / global | 2 fix attempts | For per-wave: isolate lane, others continue to barrier, coordinator decides; for global: run retry loop in a lane then stop and report; never continue or declare done with failing tests |
 | Type errors in touched files | per-wave / global | 0 | Isolate lane until barrier, then stop and fix before next wave |
 | Pre-existing type errors | global | Not counted | Ignore, they predate the change |
 | New lint errors | per-wave / global | 0 | Isolate lane; stop and fix before next wave |
 | Browser validation failure | global | 1 retry | Stop, report, and ask |
-| File not found | per-wave / global | - | If a trivial rename, adapt and note it; otherwise stop and report |
+| File not found | per-wave / global | - | Log in state file, apply smallest DAG mutation, continue; only stop and ask if no safe mutation exists |
 | Ambiguous instruction | global | 0 | Stop and ask; never assume |
+| Counter review fail | per-wave (Tier 1) / global (Tier 2) | 0 without replan | Tier 1: coordinator replans DAG before next wave; Tier 2: block merge until fixed and re-reviewed |
 
 ### Completion checklist
 
 The agent must complete this before declaring the work done:
 
-- [ ] All implementation steps done (all waves and barriers green for parallel plans)
+- [ ] All implementation steps done (all waves and barriers green)
 - [ ] New tests pass
 - [ ] Existing tests still pass
 - [ ] Typecheck passes with no new errors
 - [ ] Lint passes
-- [ ] Browser validation passed (only if applicable)
+- [ ] Browser validation passed (only if applicable, executed by a lane)
 - [ ] No out-of-scope files modified
-- [ ] Dependency graph and file-conflict matrix filled (or `Not applicable` for sequential)
+- [ ] Coordinator made zero direct source edits (all changes via lanes, verifiable in git + state file)
+- [ ] Dependency graph and file-conflict matrix filled
+- [ ] State file updated at every barrier with lane outputs, eval results, retry evidence, and counter verdicts
+- [ ] DAG log current (v1 at plan time, v2+ appended for every runtime mutation)
+- [ ] Tier 1 counter review passed for every wave and Tier 2 passed before merge
 
 ---
 
