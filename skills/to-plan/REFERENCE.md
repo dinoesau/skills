@@ -4,6 +4,22 @@ Calibration guide for writing the Agent Instructions section.
 The mechanical rules (guardrail per step, eval before step, 1-3 checkpoints, error budget defaults) live in TEMPLATE.md; this file only calibrates judgment.
 Grounded in "AI Engineering" (O'Reilly); the concepts themselves are assumed known.
 
+## Contents
+
+- Evals
+- Guardrails
+- Concurrency
+- Coordinator loop
+- Fault localization
+- DAG mutation
+- State store
+- Lane kickoff
+- Retry loop
+- Adversarial review
+- Instructions vs context
+- Human-in-the-Loop
+- Error budget
+
 ## Evals
 
 - Prefer the highest seam available: unit < integration < e2e < browser.
@@ -32,7 +48,40 @@ Grounded in "AI Engineering" (O'Reilly); the concepts themselves are assumed kno
 - The coordinator is the only writer at barriers. Barrier order is fixed: collect lane outputs, merge state file, run barrier guardrails, spawn Tier 1 counter review, then decide proceed / replan / stop.
 - Replan is autonomous and logged. The coordinator may add, remove, split, or move steps across waves without pausing, as long as leaf-first order and the file-conflict rule still hold.
 - Every replan appends a DAG version entry (v1, v2, ...) to the state file with reason, DAG diff, and affected waves. The plan file itself stays frozen; the state file is the live record.
-- If an instruction cannot be executed as written, the coordinator logs the discrepancy in the state file, applies the smallest DAG mutation that unblocks progress, and continues. It only stops and asks when guardrails, evals, and counter review all fail to produce a safe path.
+- If an instruction cannot be executed as written, the coordinator logs the discrepancy in the state file, runs the Fault Localization Report, then applies the smallest DAG mutation that unblocks progress, and continues.
+- It only stops and asks when guardrails, evals, and counter review all fail to produce a safe path.
+- Every stop-and-ask must attach the Fault Localization Report, never a bare `proceed or fix` question.
+
+## Fault localization
+
+- Iron law: no DAG mutation and no fix wave without a Fault Localization Report first.
+- Symptom fixes without a layer verdict are forbidden.
+- A wave failure is a classification problem before it is a repair problem.
+- Use exactly five layers, always labeled P1-P5.
+- P1 is Problem Statement.
+- P2 is Solution.
+- P3 is Plan/Spec (waves, DAG, guardrails, evals).
+- P4 is Agent execution.
+- P5 is Other (pre-existing failure, infra, external service, missing tool).
+- Default to one layer per failure.
+- If two layers fit, name both and mark the primary one explicitly.
+- Calibrate with these questions in order.
+- P1: does the wave diff contradict the Problem Statement, or is evidence (repro, validator output, cited path:line) missing.
+- P2: does the diff follow the plan yet leave the root cause untouched while fixing a symptom.
+- P3: would any correct lane implementation still fail because waves, DAG order, guardrails, or evals force the wrong outcome.
+- P4: does the spec state a correct outcome clearly, but the lane diff ignores it, mistypes it, or edits out-of-scope files.
+- P5: does the failure predate the diff, reproduce on the base commit, or come from the environment rather than the change.
+- Match degrees of freedom to the layer.
+- P4 and P5 are open field: respawn the lane or isolate and continue, no critique needed.
+- P2 and P3 are narrow bridge: use the exact report template in TEMPLATE.md and suggest plan-critique-loop, never auto-run it.
+- P1 stops the wave: ask the user to clarify the problem before any mutation.
+- Suggest plan-critique-loop only for P2 or P3.
+- The suggestion must include the plan path and the layer with confidence.
+- For P4, explicitly state `no critique needed - respawn with minimal DAG mutation`.
+- Three-strikes rule: after three failed fix attempts on the same wave, or two consecutive identical Tier 1 fails, stop replaning the same layer.
+- Treat repeated failure as a wrong-layer signal, reclassify one layer up (P4 -> P3 -> P2 -> P1), and ask the user with the report attached.
+- Keep the report cheap: layer, confidence (high/medium/low), evidence (validator output + path:line), root cause vs symptom in one line, recommended action in one line.
+- Log every report in the state file, appended, never rewritten.
 
 ## DAG mutation
 
