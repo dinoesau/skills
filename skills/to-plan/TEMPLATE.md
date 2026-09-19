@@ -194,7 +194,7 @@ Every Implementation step runs inside exactly one lane subagent, even when `Max 
 
 ### State file
 
-One Markdown file per plan: `docs/plan-<slug>-state.md`. Initialized at DAG v1 with one section per wave plus counter slots and DAG log. Per-wave section records inputs, files touched, key type surface, commands with output summary, eval results, retry count, and counter verdict. Append only; never rewrite history.
+One Markdown file per plan: `docs/plan-<slug>-state.md`. Initialized at DAG v1 with one section per wave plus counter slots and DAG log. Per-wave section records inputs, files touched, key type surface, commands with output summary, eval results, retry count, and Tier 1 verdict. The final gate section records Tier 2a, 2b, 2c verdicts plus the fix-cycle count. Append only; never rewrite history.
 
 ### Lane retry loop
 
@@ -232,9 +232,9 @@ Each eval runs inside its lane or after its wave's barrier (lane-local typecheck
 
 > `Run after` is `Step N`, `Wave N barrier`, or `global`. Lane-local evals (e.g. `typecheck` per lane) may run before the barrier.
 
-### Counter review (Tier 1 per wave, Tier 2 before merge)
+### Counter review (Tier 1 per wave, Tier 2 final gate before merge)
 
-Two tiers, both blocking. Tier 1 runs after each wave barrier on the wave diff. Tier 2 runs before merge on the full branch diff. A `fail` verdict blocks the next wave or the merge until the coordinator replans.
+Tier 1 runs after each wave barrier on the wave diff. Tier 2 is the final pre-merge gate on the full branch diff with three parallel lanes: 2a correctness, 2b language standard, 2c 12-factor. All gates are blocking.
 
 The coordinator spawns one `counter` subagent per review with this prompt shape, filled from Docs for Humans and the current diff:
 
@@ -253,7 +253,71 @@ Rules:
 
 - Verdict format is `pass / fail + findings`, stored in the state file with file paths and line numbers.
 - Keep the review narrow: refute the diff against the stated problem and solution. No scope redesign; file scope questions as findings.
-- Tier 1 `fail` triggers a DAG mutation before the next wave. Tier 2 `fail` blocks the merge until fixed and re-reviewed.
+- Tier 1 `fail` triggers a DAG mutation before the next wave. Tier 2 `fail` in any lane blocks the merge until fixed and re-reviewed.
+
+### Tier 2a correctness (final gate)
+
+Same `counter` prompt as above on the full branch diff. Refutes the complete change against Problem Statement and Solution. Blocking.
+
+### Tier 2b language standard (final gate)
+
+One lane per language touched by the diff, run in parallel. The lane reads the skill file directly by path; auto-trigger phrases do not apply here.
+
+| Diff touches | Skill file the lane must read |
+|--------------|-------------------------------|
+| `*.py` | `.agents/skills/good-python/SKILL.md` |
+| `*.ts`, `*.tsx` | `.agents/skills/good-typescript/SKILL.md` |
+| `*.rs` | `.agents/skills/rusty/SKILL.md` |
+
+Lane prompt shape:
+
+```
+Review this diff against the language skill.
+Skill file: <path from table above, first lane per language>
+Diff: <full branch diff>
+```
+
+Rules:
+
+- Findings on lines touched by this diff are blocking. Findings on pre-existing code outside the diff are advisory only; log them separately and do not block the merge.
+- Verdict `pass / fail + findings` goes to the state file Tier 2b slot with file paths and line numbers.
+- If no language above is touched, log `Tier 2b: not applicable - no Python, TypeScript, or Rust in diff` and proceed.
+
+### Tier 2c 12-factor (final gate, conditional)
+
+Required when the plan touches deploy, runtime, config, or backing services. Skipped with a logged reason for pure library changes with no runtime surface.
+
+Checklist (all 12, blocking on diff-touched surface, advisory on pre-existing):
+
+| # | Factor | Gate question |
+|---|--------|---------------|
+| 1 | Codebase | One repo, one deployable, change tracked in version control |
+| 2 | Dependencies | Declared explicitly, no implicit system packages, reproducible install |
+| 3 | Config | Config in environment, no secrets hardcoded, sample config updated |
+| 4 | Backing services | Services treated as attached resources, URLs and credentials via config |
+| 5 | Build, release, run | Build separate from release and run, release immutable and tagged |
+| 6 | Processes | Stateless processes, shared state in backing services, sticky sessions avoided |
+| 7 | Port binding | Service self-contained, port from environment, no hardcoded ports |
+| 8 | Concurrency | Scales via process model, no in-process singletons assumed |
+| 9 | Disposability | Fast startup, graceful shutdown, safe to kill and restart |
+| 10 | Dev/prod parity | Dev matches prod closely, no dev-only shortcuts in the diff |
+| 11 | Logs | Logs to stdout as event stream, no log files written by the app |
+| 12 | Admin processes | One-off tasks as versioned scripts, run against the release |
+
+Lane prompt shape:
+
+```
+Review this diff against the 12-factor checklist in the plan.
+Diff: <full branch diff>
+Report one pass/fail per factor with file paths and line numbers.
+```
+
+### Tier 2 fix iteration loop
+
+Any `fail` in Tier 2a, 2b, or 2c spawns fix waves as DAG v2+ executed by lanes, never by the coordinator. After fixes, re-run only the failed Tier 2 lanes.
+
+- Max 2 fix cycles for Tier 2. After the second failed re-review, stop and ask the user instead of spawning more waves.
+- Each cycle appends DAG version, fix summary, and re-review verdicts to the state file. The merge stays blocked until 2a, 2b, and 2c are all `pass` (or logged `not applicable` for 2b/2c with reason).
 
 ### Browser validation (conditional: only if the change affects UI)
 
@@ -299,7 +363,10 @@ Single source of truth for failure tolerance in this plan.
 | Browser validation failure | global | 1 retry | Stop, report, and ask |
 | File not found | per-wave / global | - | Log in state file, apply smallest DAG mutation, continue; only stop and ask if no safe mutation exists |
 | Ambiguous instruction | global | 0 | Stop and ask; never assume |
-| Counter review fail | per-wave (Tier 1) / global (Tier 2) | 0 without replan | Tier 1: coordinator replans DAG before next wave; Tier 2: block merge until fixed and re-reviewed |
+| Counter review fail (Tier 1) | per-wave | 0 without replan | Coordinator replans DAG before next wave |
+| Tier 2a correctness fail | global | max 2 fix cycles | Spawn fix waves as DAG v2+, re-review 2a; after 2nd failed re-review stop and ask |
+| Tier 2b language-standard fail | global | max 2 fix cycles | Findings on diff-touched lines block; pre-existing outside diff is advisory; fix waves then re-review 2b |
+| Tier 2c 12-factor fail | global | max 2 fix cycles | Findings on diff-touched surface block; fix waves then re-review 2c |
 
 ### Completion checklist
 
@@ -316,7 +383,11 @@ The agent must complete this before declaring the work done:
 - [ ] Dependency graph and file-conflict matrix filled
 - [ ] State file updated at every barrier with lane outputs, eval results, retry evidence, and counter verdicts
 - [ ] DAG log current (v1 at plan time, v2+ appended for every runtime mutation)
-- [ ] Tier 1 counter review passed for every wave and Tier 2 passed before merge
+- [ ] Tier 1 counter review passed for every wave
+- [ ] Tier 2a correctness passed on the full branch diff
+- [ ] Tier 2b language standard passed for every touched language (or logged not applicable with reason)
+- [ ] Tier 2c 12-factor passed (or logged skipped with reason for pure library changes)
+- [ ] Tier 2 fix cycles within budget (max 2), state file holds all verdicts and DAG versions
 
 ---
 
