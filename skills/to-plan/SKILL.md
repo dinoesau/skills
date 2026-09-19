@@ -39,6 +39,7 @@ Otherwise go straight to **Synthesize**.
 
 1. Ask the user 2-4 focused questions covering scope, test seams, and constraints.
 2. Confirm the answers back and wait for the user's approval before synthesizing.
+3. Before each pause for human input, send a notification per the Notifications section below.
 
 ### Synthesize (feature is clear)
 
@@ -72,3 +73,17 @@ Before declaring the plan done, confirm:
 - [ ] Each lane declares its retry loop (act -> eval -> reflect -> fix, max 2 fix attempts) with validator output logged to the state file
 - [ ] Each lane declares skill IDs to load via the skill tool with loading evidence (REFERENCE.md, EVALS.md); editing lanes add the kickoff gate (readiness reply + explicit GO before any edit)
 - [ ] Final gate declares Tier 2a correctness, Tier 2b language standard per touched language, and Tier 2c 12-factor (or logged skip with reason); all blocking with fix-wave iteration capped at 4 cycles
+
+## Notifications
+
+Send shell notifications via the `notify` service at lifecycle events.
+Why: the user relies on the notification service to know when to return, not on polling chat.
+Never let a `notify` failure block planning: always append `|| true` and continue, logging the failure.
+Every message must be max 300 characters in total: always pipe through `cut -c1-300`.
+
+- Before pausing for human input (Clarify questions, answer confirmation, any stop-and-ask):
+  `notify "$(printf '%s' "Human input needed: <slug> - <reason>" | cut -c1-300)" || true`
+- After verification passes and both files are written:
+  `notify "$(printf '%s' "Plan creation completed: docs/plan-<slug>.md" | cut -c1-300)" || true`
+- On any blocking failure (cannot synthesize, verification fails, unexpected error):
+  `notify "$(printf '%s' "Something went wrong with <slug>: <1-line cause>" | cut -c1-300)" || true`

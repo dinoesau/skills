@@ -395,6 +395,7 @@ Success criterion:
 At these points the agent must PAUSE and ask the user before continuing.
 Keep it to 1-3 checkpoints: each one interrupts the executor's autonomous flow.
 Use wave barriers as checkpoints.
+Before each pause, send a `notify` per the Notifications section at the very end of this plan.
 
 1. **After step <N>:** <what the user must confirm>
 2. **After Wave <N> barrier:** <all lanes in wave done, confirm merge or next wave>
@@ -443,6 +444,7 @@ The agent must complete this before declaring the work done:
 - [ ] Tier 2b language standard passed for every touched language (or logged not applicable with reason)
 - [ ] Tier 2c 12-factor passed (or logged skipped with reason for pure library changes)
 - [ ] Tier 2 fix cycles within budget (max 4), state file holds all verdicts and DAG versions
+- [ ] `notify` sent for every Human-in-the-Loop pause, for each failure, and for final completion (see Notifications below)
 
 ---
 
@@ -451,3 +453,16 @@ The agent must complete this before declaring the work done:
 | Risk | Mitigation |
 |------|-----------|
 | <risk> | <mitigation> |
+
+## Notifications (mandatory, last step)
+
+Why: the user relies on the notification service to know when to return, not on polling chat.
+The coordinator runs these via shell. Never let a `notify` failure block execution: always append `|| true`, log the failure in the state file, and continue.
+Every message must be max 300 characters in total: always pipe through `cut -c1-300`.
+
+- Before each Human-in-the-Loop pause or stop-and-ask (attach the Fault Localization Report as usual, then notify):
+  `notify "$(printf '%s' "Human input needed: <plan-slug> - <checkpoint>" | cut -c1-300)" || true`
+- On any Fault Localization Report, Tier 2 exhaustion, or barrier failure:
+  `notify "$(printf '%s' "Something went wrong with <plan-slug> Wave <N>: <1-line cause>" | cut -c1-300)" || true`
+- After the Completion checklist above is fully green, before declaring done:
+  `notify "$(printf '%s' "Implementation finished: <plan-slug>" | cut -c1-300)" || true`
