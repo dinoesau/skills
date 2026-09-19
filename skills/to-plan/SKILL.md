@@ -11,22 +11,24 @@ Feature to plan: $ARGUMENTS
 
 If no arguments were given, derive the feature from the current conversation.
 
-Produces a `docs/plan-<slug>.md` with two audiences:
+Produces a `docs/plan-<slug>.md` with two audiences plus a runtime state companion:
 
 - **Docs for Humans** - a PRD with problem, solution, user stories, implementation decisions, testing decisions
-- **Agent Instructions** - an executable spec another agent can follow without access to this conversation
+- **Agent Instructions** - an executable spec another agent can follow without access to this conversation, including the coordinator loop
+- **State file** - `docs/plan-<slug>-state.md` initialized at DAG v1, updated at each wave barrier
 
 The slug is the feature name in kebab-case, 2-5 words.
 If `docs/plan-<slug>.md` already exists, this run replaces it - say so when reporting.
+If the state file already exists, reset it to DAG v1 for the new plan.
 
-The plan file is the only output: never publish anything to the issue tracker.
+The plan file and state file are the only outputs: never publish anything to the issue tracker.
 
 ## Seams
 
 Sketch the seams at which the feature will be tested before writing the plan.
 Prefer existing seams over new ones; propose new ones at the highest point possible.
 The fewer seams across the codebase, the better - the ideal number is one.
-When decomposing for parallel execution, multiple seams may be justified — one per lane. Document the exception vs ideal=1.
+When decomposing for parallel execution, multiple seams may be justified - one per lane. Document the exception vs ideal=1.
 
 ## Process
 
@@ -42,12 +44,12 @@ Otherwise go straight to **Synthesize**.
 
 1. Explore the codebase until you can name the files and seams the feature touches.
    Respect any ADRs in the touched area.
-2. Build the dependency graph: list all files and tasks, identify leaf nodes with zero dependencies, construct the full tree, and mark file-conflict edges (two tasks touching the same file must be sequentialized or the file split). See [REFERENCE.md](REFERENCE.md) Concurrency.
-3. Partition into waves: group leaf nodes into Wave 1 (parallel), then successive waves by `depends_on`. Mark each wave's parallelizable flag and required sub-agent assignment. Render as a Mermaid DAG in Implementation Decisions.
+2. Build the dependency graph: list all files and tasks, identify leaf nodes with zero dependencies, construct the full tree, and mark file-conflict edges (two tasks touching the same file must be sequentialized or the file split). Tag it DAG v1. See [REFERENCE.md](REFERENCE.md) Concurrency and DAG mutation.
+3. Partition into waves: group leaf nodes into Wave 1, then successive waves by `depends_on`. Every wave gets a parallelizable flag and required sub-agent assignment, even sequential single-lane waves with Max parallelism 1. Render as a Mermaid DAG in Implementation Decisions. Declare the coordinator barrier procedure (merge state, run guardrails, spawn counter review) per wave. The coordinator itself implements zero steps.
 4. Write the **Docs for Humans** section using the template in [PRD-TEMPLATE.md](PRD-TEMPLATE.md), in the project's domain glossary vocabulary, with Mermaid diagrams for structural or sequential concepts.
-5. Read [REFERENCE.md](REFERENCE.md) to calibrate evals, guardrails, and checkpoints, then write the **Agent Instructions** section following the skeleton in [TEMPLATE.md](TEMPLATE.md).
+5. Read [REFERENCE.md](REFERENCE.md) to calibrate evals, guardrails, checkpoints, retry loop, state store, and adversarial review, then write the **Agent Instructions** section following the skeleton in [TEMPLATE.md](TEMPLATE.md).
 6. Fill the Required skills table by scanning `.agents/skills/` for skills the executing agent needs in the touched area.
-7. Write the result to `docs/plan-<slug>.md`.
+7. Write the result to `docs/plan-<slug>.md` and initialize `docs/plan-<slug>-state.md` at DAG v1 with per-wave sections, empty results, and the counter review slots.
 8. Verify the plan against the checklist below.
 
 ## Verification checklist
@@ -62,5 +64,10 @@ Before declaring the plan done, confirm:
 - [ ] Structural or sequential concepts in Docs for Humans are explained with Mermaid diagrams (or the plan has none because the feature is trivial)
 - [ ] Every template placeholder is replaced and every HTML comment deleted
 - [ ] The plan is self-contained: an agent with no access to this conversation can execute it
-- [ ] Dependency graph is present with leaf-first tree and file-conflict matrix (or explicit `Not applicable - sequential plan` for trivial sequential plans)
-- [ ] Each wave declares sub-agent assignment and barrier guardrail; no two parallel steps touch the same file
+- [ ] Dependency graph is present with leaf-first tree and file-conflict matrix
+- [ ] Each wave declares sub-agent assignment and barrier guardrail, even sequential single-lane waves; no two parallel steps touch the same file; coordinator implements zero steps itself
+- [ ] Coordinator loop is present with barrier merge, DAG mutation log, and autonomous replan rules
+- [ ] State file is initialized at `docs/plan-<slug>-state.md` with per-wave sections and DAG v1
+- [ ] Each lane declares its retry loop (act -> eval -> reflect -> fix, max 2 fix attempts) with validator output logged to the state file
+- [ ] Each editing lane declares the kickoff gate (readiness reply + explicit GO before any edit); read-only lanes explicitly skip it
+- [ ] Two-tier counter review is present: Tier 1 after each wave barrier, Tier 2 before merge, both blocking
