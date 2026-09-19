@@ -67,7 +67,7 @@ Grounded in "AI Engineering" (O'Reilly); the concepts themselves are assumed kno
 - The coordinator spawns one `counter` subagent per review with the wave or branch `git diff` plus the Problem Statement and Solution copied from Docs for Humans.
 - Tier 2b spawns one lane per touched language reading the skill file by path: Python reads good-python, TypeScript reads good-typescript, Rust reads rusty. Findings on diff-touched lines block; pre-existing outside the diff is advisory.
 - Tier 2c applies the 12-factor checklist in TEMPLATE.md. Required for deploy, runtime, config, or backing-service changes; skipped with a logged reason for pure library changes.
-- Tier 2 fix loop is capped at 2 cycles. After the second failed re-review the coordinator stops and asks instead of spawning more waves.
+- Tier 2 fix loop is capped at 4 cycles. After the fourth failed re-review the coordinator stops and asks instead of spawning more waves.
 - Verdict format is `pass / fail + findings`, stored in the state file. Findings must cite file paths and line numbers.
 - Keep the review narrow: refute the diff against the stated problem and solution. Do not redesign scope; file scope questions as findings for the coordinator.
 

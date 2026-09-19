@@ -64,7 +64,7 @@ A list of testing decisions that were made. Include:
 - A description of what makes a good test (only test external behavior, not implementation details)
 - Which modules will be tested
 - Prior art for the tests (i.e. similar types of tests in the codebase)
-- Adversarial review: Tier 1 counter review after each wave barrier on the wave diff; final pre-merge gate with Tier 2a correctness, Tier 2b language standard (good-python, good-typescript, rusty per touched language), and Tier 2c 12-factor (conditional on runtime surface); all blocking with `pass / fail + findings` stored in the state file; fails iterate via fix waves capped at 2 cycles
+- Adversarial review: Tier 1 counter review after each wave barrier on the wave diff; final pre-merge gate with Tier 2a correctness, Tier 2b language standard (good-python, good-typescript, rusty per touched language), and Tier 2c 12-factor (conditional on runtime surface); all blocking with `pass / fail + findings` stored in the state file; fails iterate via fix waves capped at 4 cycles
 
 ## Out of Scope
 

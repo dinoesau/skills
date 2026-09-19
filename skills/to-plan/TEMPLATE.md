@@ -316,7 +316,7 @@ Report one pass/fail per factor with file paths and line numbers.
 
 Any `fail` in Tier 2a, 2b, or 2c spawns fix waves as DAG v2+ executed by lanes, never by the coordinator. After fixes, re-run only the failed Tier 2 lanes.
 
-- Max 2 fix cycles for Tier 2. After the second failed re-review, stop and ask the user instead of spawning more waves.
+- Max 4 fix cycles for Tier 2. After the fourth failed re-review, stop and ask the user instead of spawning more waves.
 - Each cycle appends DAG version, fix summary, and re-review verdicts to the state file. The merge stays blocked until 2a, 2b, and 2c are all `pass` (or logged `not applicable` for 2b/2c with reason).
 
 ### Browser validation (conditional: only if the change affects UI)
@@ -364,9 +364,9 @@ Single source of truth for failure tolerance in this plan.
 | File not found | per-wave / global | - | Log in state file, apply smallest DAG mutation, continue; only stop and ask if no safe mutation exists |
 | Ambiguous instruction | global | 0 | Stop and ask; never assume |
 | Counter review fail (Tier 1) | per-wave | 0 without replan | Coordinator replans DAG before next wave |
-| Tier 2a correctness fail | global | max 2 fix cycles | Spawn fix waves as DAG v2+, re-review 2a; after 2nd failed re-review stop and ask |
-| Tier 2b language-standard fail | global | max 2 fix cycles | Findings on diff-touched lines block; pre-existing outside diff is advisory; fix waves then re-review 2b |
-| Tier 2c 12-factor fail | global | max 2 fix cycles | Findings on diff-touched surface block; fix waves then re-review 2c |
+| Tier 2a correctness fail | global | max 4 fix cycles | Spawn fix waves as DAG v2+, re-review 2a; after 4th failed re-review stop and ask |
+| Tier 2b language-standard fail | global | max 4 fix cycles | Findings on diff-touched lines block; pre-existing outside diff is advisory; fix waves then re-review 2b |
+| Tier 2c 12-factor fail | global | max 4 fix cycles | Findings on diff-touched surface block; fix waves then re-review 2c |
 
 ### Completion checklist
 
@@ -387,7 +387,7 @@ The agent must complete this before declaring the work done:
 - [ ] Tier 2a correctness passed on the full branch diff
 - [ ] Tier 2b language standard passed for every touched language (or logged not applicable with reason)
 - [ ] Tier 2c 12-factor passed (or logged skipped with reason for pure library changes)
-- [ ] Tier 2 fix cycles within budget (max 2), state file holds all verdicts and DAG versions
+- [ ] Tier 2 fix cycles within budget (max 4), state file holds all verdicts and DAG versions
 
 ---
 

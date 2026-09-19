@@ -70,4 +70,4 @@ Before declaring the plan done, confirm:
 - [ ] State file is initialized at `docs/plan-<slug>-state.md` with per-wave sections and DAG v1
 - [ ] Each lane declares its retry loop (act -> eval -> reflect -> fix, max 2 fix attempts) with validator output logged to the state file
 - [ ] Each editing lane declares the kickoff gate (readiness reply + explicit GO before any edit); read-only lanes explicitly skip it
-- [ ] Final gate declares Tier 2a correctness, Tier 2b language standard per touched language, and Tier 2c 12-factor (or logged skip with reason); all blocking with fix-wave iteration capped at 2 cycles
+- [ ] Final gate declares Tier 2a correctness, Tier 2b language standard per touched language, and Tier 2c 12-factor (or logged skip with reason); all blocking with fix-wave iteration capped at 4 cycles
