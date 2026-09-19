@@ -45,9 +45,9 @@ Otherwise go straight to **Synthesize**.
 1. Explore the codebase until you can name the files and seams the feature touches.
    Respect any ADRs in the touched area.
 2. Build the dependency graph: list all files and tasks, identify leaf nodes with zero dependencies, construct the full tree, and mark file-conflict edges (two tasks touching the same file must be sequentialized or the file split). Tag it DAG v1. See [REFERENCE.md](REFERENCE.md) Concurrency and DAG mutation.
-3. Partition into waves: group leaf nodes into Wave 1, then successive waves by `depends_on`. Every wave gets a parallelizable flag and required sub-agent assignment, even sequential single-lane waves with Max parallelism 1. Render as a Mermaid DAG in Implementation Decisions. Declare the coordinator barrier procedure (merge state, run guardrails, spawn counter review) per wave. The coordinator itself implements zero steps.
+3. Partition into waves: group leaf nodes into Wave 1, then successive waves by `depends_on`. Every wave gets a parallelizable flag and required sub-agent assignment, even sequential single-lane waves with Max parallelism 1. Render as a Mermaid DAG in Implementation Decisions. Declare the coordinator barrier procedure (merge state, run guardrails, spawn counter review, run fault localization on failure) per wave. The coordinator itself implements zero steps.
 4. Write the **Docs for Humans** section using the template in [PRD-TEMPLATE.md](PRD-TEMPLATE.md), in the project's domain glossary vocabulary, with Mermaid diagrams for structural or sequential concepts.
-5. Read [REFERENCE.md](REFERENCE.md) to calibrate evals, guardrails, checkpoints, retry loop, state store, and adversarial review, then write the **Agent Instructions** section following the skeleton in [TEMPLATE.md](TEMPLATE.md).
+5. Read [REFERENCE.md](REFERENCE.md) to calibrate evals, guardrails, checkpoints, retry loop, state store, adversarial review, and fault localization, then write the **Agent Instructions** section following the skeleton in [TEMPLATE.md](TEMPLATE.md).
 6. Fill the Required skills table by scanning `.agents/skills/` for skills the executing agent needs in the touched area. Include good-python, good-typescript, or rusty when the diff touches that language, so Tier 2b lanes can load them by skill ID. The skill ID is the directory name; lanes invoke it via the skill tool, never by `Read` alone.
 7. Write the result to `docs/plan-<slug>.md` and initialize `docs/plan-<slug>-state.md` at DAG v1 with per-wave sections, empty results, and the counter review slots.
 8. Verify the plan against the checklist below.
@@ -67,6 +67,7 @@ Before declaring the plan done, confirm:
 - [ ] Dependency graph is present with leaf-first tree and file-conflict matrix
 - [ ] Each wave declares sub-agent assignment and barrier guardrail, even sequential single-lane waves; no two parallel steps touch the same file; coordinator implements zero steps itself
 - [ ] Coordinator loop is present with barrier merge, DAG mutation log, and autonomous replan rules
+- [ ] Fault Localization Report section is present with strict template, P1-P5 layers, and plan-critique-loop suggestion rule (P2/P3 only)
 - [ ] State file is initialized at `docs/plan-<slug>-state.md` with per-wave sections and DAG v1
 - [ ] Each lane declares its retry loop (act -> eval -> reflect -> fix, max 2 fix attempts) with validator output logged to the state file
 - [ ] Each lane declares skill IDs to load via the skill tool with loading evidence (REFERENCE.md, EVALS.md); editing lanes add the kickoff gate (readiness reply + explicit GO before any edit)

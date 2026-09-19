@@ -70,12 +70,16 @@ per the Diagrams section in PRD-TEMPLATE.md. -->
 ### If an instruction cannot be executed as written
 
 Detailed instructions are brittle, and the codebase may have moved past the plan's base commit (see header).
-The coordinator owns recovery: log the discrepancy in the state file, apply the smallest DAG mutation that unblocks progress, bump the DAG version, and continue.
+The coordinator owns recovery, but never mutates without diagnosing first.
+Iron law: no DAG mutation and no fix wave without a Fault Localization Report.
 
 1. Log the mismatch in the state file (expected vs actual, files involved).
 2. If the mismatch is trivial (e.g. a slightly different file path), adapt, continue, and note it in the state file.
-3. Otherwise apply a DAG mutation per the DAG mutation rules, record reason + DAG diff + affected waves, and continue.
-4. Only stop and ask when guardrails, evals, and counter review all fail to produce a safe path. Never improvise silently without logging.
+3. Otherwise write the Fault Localization Report (see section below), record reason + DAG diff + affected waves, and continue.
+4. Only stop and ask when guardrails, evals, and counter review all fail to produce a safe path.
+5. Every stop-and-ask must attach the Fault Localization Report.
+6. Never improvise silently without logging.
+7. Never ask a bare `proceed to next wave or fix this one` question without the report.
 
 ### Project commands
 
@@ -195,8 +199,8 @@ Barrier order is fixed. The coordinator is the only writer at barriers and NEVER
 1. Collect lane outputs (files touched, commands run, eval results).
 2. Merge into `docs/plan-<slug>-state.md` per-wave sections. Lanes never merge shared context themselves.
 3. Run barrier guardrails + wave evals (read-only checks like `git diff`, test output review).
-4. Spawn Tier 1 counter review (blocking). On `fail`, apply a DAG mutation and replan before the next wave.
-5. Decide: proceed to next wave, replan on new DAG version, or stop and ask if no safe path exists.
+4. Spawn Tier 1 counter review (blocking). On `fail`, write the Fault Localization Report before any DAG mutation.
+5. Decide: proceed to next wave, replan on new DAG version, or stop and ask with the report attached if no safe path exists.
 
 | Coordinator may | Coordinator must NOT |
 |-----------------|----------------------|
@@ -207,9 +211,32 @@ Barrier order is fixed. The coordinator is the only writer at barriers and NEVER
 
 Every Implementation step runs inside exactly one lane subagent, even when `Max parallelism` is 1. No step is ownerless.
 
+### Fault Localization Report (blocking before any replan or stop-and-ask)
+
+Trigger: lane retry loop exhausted (2 fix attempts), Tier 1 `fail`, or any barrier guardrail failure.
+The coordinator writes exactly one report per failure, using this strict template.
+Copy it into the state file and into any stop-and-ask message.
+
+```
+Fault Localization Report - Wave <N>
+Layer: P1 Problem | P2 Solution | P3 Plan/Spec | P4 Agent | P5 Other (confidence: high/medium/low)
+Evidence: <validator output + file paths with line numbers, e.g. src/handlers.py:42>
+Root cause vs symptom (1 line): <what is broken vs what merely looks broken>
+Recommended action (1 line): <respawn lane | minimal DAG mutation | clarify problem | suggest plan-critique-loop>
+Critique suggestion: <only for P2/P3: `Run plan-critique-loop on docs/plan-<slug>.md` | otherwise: no critique needed>
+```
+
+Conditional workflow:
+
+1. Failure occurred? Write the report first, mutate second.
+2. Layer is P4 or P5? Apply the minimal DAG mutation or respawn the lane. State `no critique needed`. Continue.
+3. Layer is P2 or P3? Suggest plan-critique-loop on `docs/plan-<slug>.md`. Never auto-run it. Wait for user approval or apply the minimal unblocking mutation and note the pending critique.
+4. Layer is P1? Stop and ask for problem clarification. No mutation until the user confirms.
+5. Same wave failed 3 times, or Tier 1 failed twice with identical findings? Reclassify one layer up (P4 -> P3 -> P2 -> P1) and stop and ask with the report attached. Do not replan the same layer again.
+
 ### State file
 
-One Markdown file per plan: `docs/plan-<slug>-state.md`. Initialized at DAG v1 with one section per wave plus counter slots and DAG log. Per-wave section records inputs, files touched, key type surface, commands with output summary, eval results, retry count, and Tier 1 verdict. The final gate section records Tier 2a, 2b, 2c verdicts plus the fix-cycle count. Append only; never rewrite history.
+One Markdown file per plan: `docs/plan-<slug>-state.md`. Initialized at DAG v1 with one section per wave plus counter slots and DAG log. Per-wave section records inputs, files touched, key type surface, commands with output summary, eval results, retry count, and Tier 1 verdict. Every failure also appends one Fault Localization Report with layer, confidence, evidence, and recommended action. The final gate section records Tier 2a, 2b, 2c verdicts plus the fix-cycle count. Append only; never rewrite history.
 
 ### Lane retry loop
 
@@ -270,7 +297,7 @@ Rules:
 
 - Verdict format is `pass / fail + findings`, stored in the state file with file paths and line numbers. A verdict without loading evidence is invalid and the coordinator re-spawns the review.
 - Keep the review narrow: refute the diff against the stated problem and solution. No scope redesign; file scope questions as findings.
-- Tier 1 `fail` triggers a DAG mutation before the next wave. Tier 2 `fail` in any lane blocks the merge until fixed and re-reviewed.
+- Tier 1 `fail` triggers the Fault Localization Report before any DAG mutation. Tier 2 `fail` in any lane blocks the merge until fixed and re-reviewed.
 
 ### Tier 2a correctness (final gate)
 
@@ -387,7 +414,9 @@ Single source of truth for failure tolerance in this plan.
 | Browser validation failure | global | 1 retry | Stop, report, and ask |
 | File not found | per-wave / global | - | Log in state file, apply smallest DAG mutation, continue; only stop and ask if no safe mutation exists |
 | Ambiguous instruction | global | 0 | Stop and ask; never assume |
-| Counter review fail (Tier 1) | per-wave | 0 without replan | Coordinator replans DAG before next wave |
+| Counter review fail (Tier 1) | per-wave | 0 without replan | Write Fault Localization Report, then coordinator replans DAG before next wave |
+| Missing Fault Localization Report | global | 0 | Block the replan and the stop-and-ask until the report exists in the state file |
+| Same wave fails 3 times or identical Tier 1 fail twice | global | 0 | Reclassify one layer up (P4 -> P3 -> P2 -> P1), stop and ask with report attached |
 | Tier 2a correctness fail | global | max 4 fix cycles | Spawn fix waves as DAG v2+, re-review 2a; after 4th failed re-review stop and ask |
 | Tier 2b language-standard fail | global | max 4 fix cycles | Findings on diff-touched lines block; pre-existing outside diff is advisory; fix waves then re-review 2b |
 | Tier 2c 12-factor fail | global | max 4 fix cycles | Findings on diff-touched surface block; fix waves then re-review 2c |
@@ -408,6 +437,8 @@ The agent must complete this before declaring the work done:
 - [ ] State file updated at every barrier with lane outputs, eval results, retry evidence, and counter verdicts
 - [ ] DAG log current (v1 at plan time, v2+ appended for every runtime mutation)
 - [ ] Tier 1 counter review passed for every wave
+- [ ] Fault Localization Report written for every wave failure, with P1-P5 layer, confidence, evidence with path:line, and recommended action
+- [ ] plan-critique-loop suggested only for P2/P3 failures, never auto-run, with plan path included
 - [ ] Tier 2a correctness passed on the full branch diff
 - [ ] Tier 2b language standard passed for every touched language (or logged not applicable with reason)
 - [ ] Tier 2c 12-factor passed (or logged skipped with reason for pure library changes)
