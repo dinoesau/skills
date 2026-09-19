@@ -48,7 +48,7 @@ Otherwise go straight to **Synthesize**.
 3. Partition into waves: group leaf nodes into Wave 1, then successive waves by `depends_on`. Every wave gets a parallelizable flag and required sub-agent assignment, even sequential single-lane waves with Max parallelism 1. Render as a Mermaid DAG in Implementation Decisions. Declare the coordinator barrier procedure (merge state, run guardrails, spawn counter review) per wave. The coordinator itself implements zero steps.
 4. Write the **Docs for Humans** section using the template in [PRD-TEMPLATE.md](PRD-TEMPLATE.md), in the project's domain glossary vocabulary, with Mermaid diagrams for structural or sequential concepts.
 5. Read [REFERENCE.md](REFERENCE.md) to calibrate evals, guardrails, checkpoints, retry loop, state store, and adversarial review, then write the **Agent Instructions** section following the skeleton in [TEMPLATE.md](TEMPLATE.md).
-6. Fill the Required skills table by scanning `.agents/skills/` for skills the executing agent needs in the touched area. Include good-python, good-typescript, or rusty when the diff touches that language, so Tier 2b lanes can read them by path.
+6. Fill the Required skills table by scanning `.agents/skills/` for skills the executing agent needs in the touched area. Include good-python, good-typescript, or rusty when the diff touches that language, so Tier 2b lanes can load them by skill ID. The skill ID is the directory name; lanes invoke it via the skill tool, never by `Read` alone.
 7. Write the result to `docs/plan-<slug>.md` and initialize `docs/plan-<slug>-state.md` at DAG v1 with per-wave sections, empty results, and the counter review slots.
 8. Verify the plan against the checklist below.
 
