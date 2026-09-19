@@ -102,6 +102,20 @@ Before finishing, confirm:
 - [ ] Loop stopped on all-approve, repeat dissent, or cycle 10, never later
 - [ ] Final report states cycles, files rewritten, and APPROVED vs CAPPED
 
+## Notifications
+
+Send shell notifications via the `notify` service at lifecycle events.
+Why: the user relies on the notification service to know when to return, not on polling chat.
+Never let a `notify` failure block the loop: always append `|| true` and continue, logging the failure.
+Every message must be max 300 characters in total: always pipe through `cut -c1-300`.
+
+- Before pausing for human input (unclear rewrite target, no code changes to critique, CAPPED items needing a decision, any stop-and-ask):
+  `notify "$(printf '%s' "Human input needed for critique <plan-path>: <reason>" | cut -c1-300)" || true`
+- After the final report (APPROVED or CAPPED with open items):
+  `notify "$(printf '%s' "Critique loop finished: <plan-path> - APPROVED|CAPPED" | cut -c1-300)" || true`
+- On any blocking failure (gh fetch fails, rewrite fails, unexpected error):
+  `notify "$(printf '%s' "Something went wrong with critique <plan-path>: <1-line cause>" | cut -c1-300)" || true`
+
 ## One-level references
 
 Read only what the current wave needs. Do not follow nested links.
