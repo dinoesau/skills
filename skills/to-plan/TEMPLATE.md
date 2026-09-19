@@ -143,13 +143,13 @@ graph TD
 
 <!-- Every wave gets minimal context per lane: its wave's files + key types + one example test. Shared context merges at barriers. Sequential waves use one lane with Max parallelism 1. -->
 
-- Wave 1 Lane A (Step 1): `<files>`, `<key types>`, `<example test>`
-- Wave 1 Lane B (Step 2): `<files>`, `<key types>`, `<example test>`
+- Wave 1 Lane A (Step 1): `<files>`, `<key types>`, `<example test>`, skills: `<skill IDs, e.g. good-python>`
+- Wave 1 Lane B (Step 2): `<files>`, `<key types>`, `<example test>`, skills: `<skill IDs or none>`
 - Shared after Wave 1 barrier: `<integration tests, shared types>`
 
-### Lane kickoff gate (required for editing lanes)
+### Lane kickoff gate (Load phase for all lanes, GO phase for editing lanes)
 
-Two-phase start. Phase 1: readiness. Phase 2: GO. A lane must not edit any file before receiving GO.
+Two-phase start. Phase 1: skill load + readiness (every lane, including `explore` and `counter` reviews). Phase 2: GO (editing lanes only). A lane must not edit any file before receiving GO.
 
 The coordinator spawns each editing lane with this prompt shape:
 
@@ -166,13 +166,27 @@ Reply with exactly:
 4. Confirmation that you are ready to start. Do not edit any file yet.
 ```
 
+The coordinator spawns each review lane (`counter`, `explore`) with this prompt shape:
+
+```
+Goal: Review Plan: `docs/plan-<slug>.md`, <Wave N diff | full branch diff>
+Role: Senior Software Engineer
+
+Step 1: Load every applicable language skill from Required skills via the skill tool (one `Load the skill with id X using the skill tool.` call per ID), then read REFERENCE.md and EVALS.md from each reported skill base directory. List skill IDs plus supporting files read as loading evidence.
+Step 2: Reply with exactly:
+1. Summary (2-3 lines) of what is under review.
+2. Loading evidence from Step 1, or `none` with reason when no language skill applies.
+3. Critical points and edge cases you detect.
+A verdict or finding without loading evidence is invalid.
+```
+
 Rules:
 
-- Load skills via the skill tool, never by `Read` alone. `Read` on a SKILL.md path does not register a session load and hides supporting files. Fallback to direct `Read` of SKILL.md plus REFERENCE.md, EXAMPLES.md, and EVALS.md only when the skill tool denies access; log the fallback in the readiness reply.
+- Load skills via the skill tool, never by `Read` alone. `Read` on a SKILL.md path does not register a session load and hides supporting files. Fallback to direct `Read` of SKILL.md plus REFERENCE.md, EXAMPLES.md, and EVALS.md only when the skill tool denies access; log the fallback in the reply.
 - One readiness round only. If the summary is wrong, the coordinator corrects scope and re-spawns or aborts the lane; do not debate across rounds.
 - Allowed files are limited to the Files column for this lane. Anything else is out of scope.
-- After readiness passes, the coordinator replies with explicit `GO`. Only then may the lane start the retry loop.
-- Read-only `explore` lanes, `counter` reviews, and the trivial single-step exception skip this gate.
+- After readiness passes, the coordinator replies with explicit `GO` to editing lanes. Only then may the lane start the retry loop. Review lanes proceed to findings once loading evidence is accepted; there is no GO for read-only work.
+- Only the trivial single-step exception skips this gate, and must log why delegation overhead is not justified.
 
 ### Coordinator protocol
 
@@ -248,11 +262,13 @@ Solution:
 <copy Solution from Docs for Humans verbatim>
 
 Scope: <wave diff for Tier 1, full branch diff for Tier 2>
+
+Before refuting: load every applicable language skill from Required skills via the skill tool (one `Load the skill with id X using the skill tool.` call per ID), then read REFERENCE.md and EVALS.md from each reported skill base directory. Open the review with loading evidence (skill IDs plus supporting files read), or `none` with reason when no language skill applies.
 ```
 
 Rules:
 
-- Verdict format is `pass / fail + findings`, stored in the state file with file paths and line numbers.
+- Verdict format is `pass / fail + findings`, stored in the state file with file paths and line numbers. A verdict without loading evidence is invalid and the coordinator re-spawns the review.
 - Keep the review narrow: refute the diff against the stated problem and solution. No scope redesign; file scope questions as findings.
 - Tier 1 `fail` triggers a DAG mutation before the next wave. Tier 2 `fail` in any lane blocks the merge until fixed and re-reviewed.
 
@@ -260,9 +276,9 @@ Rules:
 
 Same `counter` prompt as above on the full branch diff. Refutes the complete change against Problem Statement and Solution. Blocking.
 
-### Tier 2b language standard (final gate)
+### Tier 2b language standard (final gate, `counter` type)
 
-One lane per language touched by the diff, run in parallel. The lane loads the skill via the skill tool; auto-trigger phrases do not apply here. Verified invocation: `Load the skill with id `<skill-id>` using the skill tool.`
+One `counter` lane per language touched by the diff, run in parallel. The lane loads the skill via the skill tool; auto-trigger phrases do not apply here. Verified invocation: `Load the skill with id `<skill-id>` using the skill tool.`
 
 | Diff touches | Skill ID | Fallback skill file |
 |--------------|----------|---------------------|
@@ -291,9 +307,9 @@ Rules:
 - Verdict `pass / fail + findings` goes to the state file Tier 2b slot with file paths and line numbers.
 - If no language above is touched, log `Tier 2b: not applicable - no Python, TypeScript, or Rust in diff` and proceed.
 
-### Tier 2c 12-factor (final gate, conditional)
+### Tier 2c 12-factor (final gate, conditional, `counter` type)
 
-Required when the plan touches deploy, runtime, config, or backing services. Skipped with a logged reason for pure library changes with no runtime surface.
+Required when the plan touches deploy, runtime, config, or backing services. Skipped with a logged reason for pure library changes with no runtime surface. Runs as a `counter` lane.
 
 Checklist (all 12, blocking on diff-touched surface, advisory on pre-existing):
 

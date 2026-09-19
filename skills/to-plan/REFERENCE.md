@@ -50,10 +50,11 @@ Grounded in "AI Engineering" (O'Reilly); the concepts themselves are assumed kno
 
 ## Lane kickoff
 
-- Require the readiness gate for every lane that edits code. Skip it for read-only `explore` lanes, `counter` reviews, and the trivial single-step exception.
+- Require the load phase for every lane, including `explore` and `counter` reviews. Only the GO phase is editing-only; review lanes proceed to findings once loading evidence is accepted.
 - Judge readiness on four signals: correct problem summary, correct skill IDs loaded via the skill tool, supporting files read (REFERENCE.md, EVALS.md), and at least one concrete edge case. A verdict or readiness reply without loading evidence is invalid; re-spawn rather than coaching across rounds.
+- Tier 2b and Tier 2c run as `counter` type with their gate skill loaded: 2b loads the language skill, 2c works from the 12-factor checklist in the plan.
 - The GO must be explicit. `Proceed`, `GO`, or a corrected re-spawn counts. Silence or an unrelated message does not count.
-- Cost control: one extra roundtrip per editing lane is cheap compared to rework from a misunderstood scope. Do not add a second confirmation round inside the lane.
+- Cost control: one extra roundtrip per editing lane is cheap compared to rework from a misunderstood scope. Review lanes pay one skill-load roundtrip; keep it to the applicable language skills only. Do not add a second confirmation round inside the lane.
 
 ## Retry loop
 
@@ -65,7 +66,7 @@ Grounded in "AI Engineering" (O'Reilly); the concepts themselves are assumed kno
 
 - Two tiers, both blocking. Tier 1 runs after each wave barrier on the wave diff. Tier 2 is the final pre-merge gate with three parallel lanes: 2a correctness, 2b language standard, 2c 12-factor. Any `fail` blocks the next wave or the merge until the coordinator replans with fix waves.
 - The coordinator spawns one `counter` subagent per review with the wave or branch `git diff` plus the Problem Statement and Solution copied from Docs for Humans.
-- Tier 2b spawns one lane per touched language loading the skill via the skill tool: Python loads good-python, TypeScript loads good-typescript, Rust loads rusty, then reads REFERENCE.md and EVALS.md from the skill base directory. Findings on diff-touched lines block; pre-existing outside the diff is advisory.
+- Tier 2b spawns one `counter` lane per touched language loading the skill via the skill tool: Python loads good-python, TypeScript loads good-typescript, Rust loads rusty, then reads REFERENCE.md and EVALS.md from the skill base directory. Findings on diff-touched lines block; pre-existing outside the diff is advisory.
 - Tier 2c applies the 12-factor checklist in TEMPLATE.md. Required for deploy, runtime, config, or backing-service changes; skipped with a logged reason for pure library changes.
 - Tier 2 fix loop is capped at 4 cycles. After the fourth failed re-review the coordinator stops and asks instead of spawning more waves.
 - Verdict format is `pass / fail + findings`, stored in the state file. Findings must cite file paths and line numbers.
