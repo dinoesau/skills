@@ -5,8 +5,10 @@ Replace every <placeholder>.
 Delete sections marked (conditional) when they do not apply.
 Delete every HTML comment, including this one, from the final plan. -->
 
-> Generated: <YYYY-MM-DD> | Base commit: <output of `git rev-parse --short HEAD`> | DAG: v1
-> State file: `docs/plan-<slug>-state.md` - the live runtime record. This plan file stays frozen; all barrier merges, DAG mutations, retry evidence, and counter verdicts append to the state file.
+> Generated: <YYYY-MM-DD> | Base commit: <output of `git rev-parse --short HEAD`> | DAG: v1 | Est. scope: +<ins> -<del> in <N> files (~<churn> churn)
+> State file: `docs/plan-<slug>-state.md` - the live runtime record. This plan file stays frozen; all barrier merges, DAG mutations, retry evidence, counter verdicts, and actual line changes append to the state file.
+>
+> Scope format: `+<insertions> -<deletions> in <N> files (~<churn> churn)` where churn is insertions + deletions. Example: `+156 -43 in 5 files (~199 churn)`. The header value is the frozen estimate at plan time; the state file header tracks the live actual via `git diff --shortstat <base-commit>`. If scope is unknown, write `Est. scope: TBD` and say why.
 
 ## Required skills
 
@@ -199,8 +201,9 @@ Barrier order is fixed. The coordinator is the only writer at barriers and NEVER
 1. Collect lane outputs (files touched, commands run, eval results).
 2. Merge into `docs/plan-<slug>-state.md` per-wave sections. Lanes never merge shared context themselves.
 3. Run barrier guardrails + wave evals (read-only checks like `git diff`, test output review).
-4. Spawn Tier 1 counter review (blocking). On `fail`, write the Fault Localization Report before any DAG mutation.
-5. Decide: proceed to next wave, replan on new DAG version, or stop and ask with the report attached if no safe path exists.
+4. Record actual line changes in the state file header via `git diff --shortstat <base-commit>` in `+<ins> -<del> in <N> files` format (e.g. `Actual vs base (Wave 2 barrier): +210 -85 in 4 files`).
+5. Spawn Tier 1 counter review (blocking). On `fail`, write the Fault Localization Report before any DAG mutation.
+6. Decide: proceed to next wave, replan on new DAG version, or stop and ask with the report attached if no safe path exists.
 
 | Coordinator may | Coordinator must NOT |
 |-----------------|----------------------|
@@ -236,7 +239,7 @@ Conditional workflow:
 
 ### State file
 
-One Markdown file per plan: `docs/plan-<slug>-state.md`. Initialized at DAG v1 with one section per wave plus counter slots and DAG log. Per-wave section records inputs, files touched, key type surface, commands with output summary, eval results, retry count, and Tier 1 verdict. Every failure also appends one Fault Localization Report with layer, confidence, evidence, and recommended action. The final gate section records Tier 2a, 2b, 2c verdicts plus the fix-cycle count. Append only; never rewrite history.
+One Markdown file per plan: `docs/plan-<slug>-state.md`. Initialized at DAG v1 with one section per wave plus counter slots and DAG log. Its header carries the live line-change count, updated at each barrier: `Actual vs base (Wave <N> barrier): +<ins> -<del> in <N> files (base: <short HEAD>)`. Per-wave section records inputs, files touched, key type surface, commands with output summary, eval results, retry count, and Tier 1 verdict. Every failure also appends one Fault Localization Report with layer, confidence, evidence, and recommended action. The final gate section records Tier 2a, 2b, 2c verdicts plus the fix-cycle count. Append only; never rewrite history.
 
 ### Lane retry loop
 
@@ -435,7 +438,8 @@ The agent must complete this before declaring the work done:
 - [ ] No out-of-scope files modified
 - [ ] Coordinator made zero direct source edits (all changes via lanes, verifiable in git + state file)
 - [ ] Dependency graph and file-conflict matrix filled
-- [ ] State file updated at every barrier with lane outputs, eval results, retry evidence, and counter verdicts
+- [ ] Est. scope present in the header in `+<ins> -<del> in <N> files (~<churn> churn)` format (or `TBD` with reason)
+- [ ] State file updated at every barrier with lane outputs, eval results, retry evidence, counter verdicts, and actual line changes (`Actual vs base`)
 - [ ] DAG log current (v1 at plan time, v2+ appended for every runtime mutation)
 - [ ] Tier 1 counter review passed for every wave
 - [ ] Fault Localization Report written for every wave failure, with P1-P5 layer, confidence, evidence with path:line, and recommended action
