@@ -9,10 +9,11 @@ Input: a plan that adds `src/billing/invoice.py` with a hardcoded Stripe key, no
 Expected:
 
 - [ ] Step 2 filters to `C1: src/billing/invoice.py` and skips PRD prose.
-- [ ] Counter 1 returns BLOCKING on config factor with env fix.
-- [ ] Counter 2 returns BLOCKING on missing TDD seam.
-- [ ] Rewrite moves the key to env and adds a test step in place.
-- [ ] Final report states cycles run and files rewritten.
+- [ ] Counter 1 returns BLOCKING on config factor with BEFORE plus AFTER showing env fix.
+- [ ] Counter 2 returns BLOCKING on missing TDD seam with BEFORE plus AFTER.
+- [ ] Resolution subagent returns ACCEPT or MODIFIED per BLOCKING with REJECTs logged.
+- [ ] Rewrite applies only accepted AFTERs in place and adds a test step.
+- [ ] Final report states cycles run, resolution decisions, and files rewritten.
 
 ## Scenario 2: clean plan approves fast
 
@@ -33,8 +34,20 @@ Expected:
 
 - [ ] Step 1 resolves the issue via `gh issue view` or pasted body.
 - [ ] Step 2 lists exactly `C1` and `C2`, ignoring background story.
-- [ ] Counter 3 names the test seam per `Cn` and flags unit-only coverage as BLOCKING where applicable.
+- [ ] Counter 3 names the test seam per `Cn` and flags unit-only coverage as BLOCKING with BEFORE plus AFTER.
+- [ ] Resolution subagent adjudicates both `Cn` findings before any rewrite.
 - [ ] Rewrite touches only the two code sections in the source file.
+
+## Scenario 4: resolution rejects a counter proposal
+
+Input: a plan where Counter 2 proposes a BEFORE/AFTER refactor that conflicts with Counter 3 seam advice.
+
+Expected:
+
+- [ ] Both BLOCKINGs carry BEFORE plus AFTER.
+- [ ] Resolution returns one ACCEPT or MODIFIED and one REJECT with reason, or two MODIFIEDs with conflict noted.
+- [ ] Rewrite applies only the accepted AFTER.
+- [ ] Final report logs the REJECT with lane name and reason.
 
 ## Trigger test
 

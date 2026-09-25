@@ -196,14 +196,15 @@ Rules:
 
 ### Coordinator protocol
 
-Barrier order is fixed. The coordinator is the only writer at barriers and NEVER implements steps itself:
+Barrier order is fixed. The coordinator is the only writer at barriers and NEVER implements steps itself. It is the brain that decides via the resolution subagent:
 
-1. Collect lane outputs (files touched, commands run, eval results).
+1. Collect lane outputs (files touched, commands run, eval results, lane BEFORE/AFTER proposals if any).
 2. Merge into `docs/plan-<slug>-state.md` per-wave sections. Lanes never merge shared context themselves.
 3. Run barrier guardrails + wave evals (read-only checks like `git diff`, test output review).
 4. Record actual line changes in the state file header via `git diff --shortstat <base-commit>` in `+<ins> -<del> in <N> files` format (e.g. `Actual vs base (Wave 2 barrier): +210 -85 in 4 files`).
-5. Spawn Tier 1 counter review (blocking). On `fail`, write the Fault Localization Report before any DAG mutation.
-6. Decide: proceed to next wave, replan on new DAG version, or stop and ask with the report attached if no safe path exists.
+5. Spawn Tier 1 counter review (blocking). Counters return `fail` findings with BEFORE/AFTER, never direct edits.
+6. Spawn the resolution subagent with counter BEFORE/AFTERs plus lane BEFORE/AFTERs. It returns ACCEPT, REJECT with reason, or MODIFIED with superseding AFTER per finding. On `fail`, write the Fault Localization Report before any DAG mutation, then build fix waves only from accepted AFTERs.
+7. Decide: proceed to next wave, replan on new DAG version, or stop and ask with the report attached if no safe path exists.
 
 | Coordinator may | Coordinator must NOT |
 |-----------------|----------------------|
@@ -243,7 +244,7 @@ One Markdown file per plan: `docs/plan-<slug>-state.md`. Initialized at DAG v1 w
 
 ### Lane retry loop
 
-Each lane runs act -> eval -> reflect -> fix, max 2 fix attempts. Each attempt logs validator output (typecheck, test, lint) into its state file section before retrying. Retries without evidence are not allowed. The third failure isolates the lane until the barrier; other lanes continue and the coordinator decides at the barrier.
+Each lane runs act -> eval -> reflect -> fix, max 2 fix attempts. Each attempt logs validator output (typecheck, test, lint) into its state file section before retrying. Retries without evidence are not allowed. When a lane proposes an alternative fix, it reports it as BEFORE (current code) plus AFTER (proposed replacement) for the resolver to adjudicate. The third failure isolates the lane until the barrier; other lanes continue and the coordinator decides at the barrier.
 
 ### Implementation steps
 
@@ -279,7 +280,7 @@ Each eval runs inside its lane or after its wave's barrier (lane-local typecheck
 
 ### Counter review (Tier 1 per wave, Tier 2 final gate before merge)
 
-Tier 1 runs after each wave barrier on the wave diff. Tier 2 is the final pre-merge gate on the full branch diff with three parallel lanes: 2a correctness, 2b language standard, 2c 12-factor. All gates are blocking.
+Tier 1 runs after each wave barrier on the wave diff. Tier 2 is the final pre-merge gate on the full branch diff with three parallel lanes: 2a correctness, 2b language standard, 2c 12-factor. All gates are blocking. Counters propose BEFORE/AFTER, the resolution subagent decides, the coordinator owns the decision.
 
 The coordinator spawns one `counter` subagent per review with this prompt shape, filled from Docs for Humans and the current diff:
 
@@ -294,13 +295,23 @@ Solution:
 Scope: <wave diff for Tier 1, full branch diff for Tier 2>
 
 Before refuting: load every applicable language skill from Required skills via the skill tool (one `Load the skill with id X using the skill tool.` call per ID), then read REFERENCE.md and EVALS.md from each reported skill base directory. Open the review with loading evidence (skill IDs plus supporting files read), or `none` with reason when no language skill applies.
+For each fail finding, append BEFORE (exact diff lines under review) plus AFTER (literal replacement, paste-ready). Propose, never apply.
+```
+
+Resolution subagent prompt shape (spawned once per barrier or final gate after counters report):
+
+```
+You are the resolution subagent for <Wave N barrier | Tier 2 final gate> of `docs/plan-<slug>.md`.
+Input: Problem Statement, Solution, wave or branch diff, all counter fail findings with BEFORE/AFTER, lane BEFORE/AFTER proposals.
+Output per finding: ACCEPT (apply AFTER as-is), REJECT with 1-line reason, or MODIFIED with superseding AFTER.
+Rules: deduplicate identical file plus reason pairs, blocking findings on diff-touched lines beat advisory, keep conflicts as two open items, never silently drop.
 ```
 
 Rules:
 
-- Verdict format is `pass / fail + findings`, stored in the state file with file paths and line numbers. A verdict without loading evidence is invalid and the coordinator re-spawns the review.
+- Verdict format is `pass / fail + findings with BEFORE/AFTER`, stored in the state file with file paths and line numbers. A verdict without loading evidence is invalid and the coordinator re-spawns the review. A `fail` without BEFORE plus AFTER is invalid and the coordinator re-spawns the review.
 - Keep the review narrow: refute the diff against the stated problem and solution. No scope redesign; file scope questions as findings.
-- Tier 1 `fail` triggers the Fault Localization Report before any DAG mutation. Tier 2 `fail` in any lane blocks the merge until fixed and re-reviewed.
+- Tier 1 `fail` triggers the Fault Localization Report before any DAG mutation, then resolution decides which AFTERs become fix waves. Tier 2 `fail` in any lane blocks the merge until the resolver accepts AFTERs, lanes fix, and the failed lanes re-review.
 
 ### Tier 2a correctness (final gate)
 
@@ -324,6 +335,7 @@ Review this diff against the language skill.
 Skill ID: <id from table above, one lane per language>
 Diff: <full branch diff>
 After loading, read REFERENCE.md and EVALS.md from the reported skill base directory (EXAMPLES.md as support) before writing findings.
+For each fail finding, append BEFORE (exact diff lines) plus AFTER (literal replacement). Propose, never apply.
 ```
 
 Rules:
@@ -333,8 +345,8 @@ Rules:
 
 Rules:
 
-- Findings on lines touched by this diff are blocking. Findings on pre-existing code outside the diff are advisory only; log them separately and do not block the merge.
-- Verdict `pass / fail + findings` goes to the state file Tier 2b slot with file paths and line numbers.
+- Findings on lines touched by this diff are blocking and must carry BEFORE plus AFTER. Findings on pre-existing code outside the diff are advisory only; log them separately and do not block the merge.
+- Verdict `pass / fail + findings with BEFORE/AFTER` goes to the state file Tier 2b slot with file paths and line numbers.
 - If no language above is touched, log `Tier 2b: not applicable - no Python, TypeScript, or Rust in diff` and proceed.
 
 ### Tier 2c 12-factor (final gate, conditional, `counter` type)
@@ -364,11 +376,12 @@ Lane prompt shape:
 Review this diff against the 12-factor checklist in the plan.
 Diff: <full branch diff>
 Report one pass/fail per factor with file paths and line numbers.
+For each fail, append BEFORE (exact diff lines) plus AFTER (literal replacement). Propose, never apply.
 ```
 
 ### Tier 2 fix iteration loop
 
-Any `fail` in Tier 2a, 2b, or 2c spawns fix waves as DAG v2+ executed by lanes, never by the coordinator. After fixes, re-run only the failed Tier 2 lanes.
+Any `fail` in Tier 2a, 2b, or 2c goes to the resolution subagent first. Only ACCEPT and MODIFIED AFTERs spawn fix waves as DAG v2+ executed by lanes, never by the coordinator. After fixes, re-run only the failed Tier 2 lanes.
 
 - Max 4 fix cycles for Tier 2. After the fourth failed re-review, stop and ask the user instead of spawning more waves.
 - Each cycle appends DAG version, fix summary, and re-review verdicts to the state file. The merge stays blocked until 2a, 2b, and 2c are all `pass` (or logged `not applicable` for 2b/2c with reason).
@@ -439,15 +452,16 @@ The agent must complete this before declaring the work done:
 - [ ] Coordinator made zero direct source edits (all changes via lanes, verifiable in git + state file)
 - [ ] Dependency graph and file-conflict matrix filled
 - [ ] Est. scope present in the header in `+<ins> -<del> in <N> files (~<churn> churn)` format (or `TBD` with reason)
-- [ ] State file updated at every barrier with lane outputs, eval results, retry evidence, counter verdicts, and actual line changes (`Actual vs base`)
+- [ ] State file updated at every barrier with lane outputs, eval results, retry evidence, counter verdicts with BEFORE/AFTER, resolution decisions, and actual line changes (`Actual vs base`)
 - [ ] DAG log current (v1 at plan time, v2+ appended for every runtime mutation)
-- [ ] Tier 1 counter review passed for every wave
+- [ ] Tier 1 counter review passed for every wave (every `fail` carried BEFORE plus AFTER, invalid ones re-spawned)
+- [ ] Resolution subagent ran per barrier and final gate with ACCEPT, REJECT, or MODIFIED per finding; only accepted AFTERs became fix waves
 - [ ] Fault Localization Report written for every wave failure, with P1-P5 layer, confidence, evidence with path:line, and recommended action
 - [ ] plan-critique-loop suggested only for P2/P3 failures, never auto-run, with plan path included
-- [ ] Tier 2a correctness passed on the full branch diff
+- [ ] Tier 2a correctness passed on the full branch diff (findings with BEFORE/AFTER)
 - [ ] Tier 2b language standard passed for every touched language (or logged not applicable with reason)
 - [ ] Tier 2c 12-factor passed (or logged skipped with reason for pure library changes)
-- [ ] Tier 2 fix cycles within budget (max 4), state file holds all verdicts and DAG versions
+- [ ] Tier 2 fix cycles within budget (max 4), state file holds all verdicts, resolution decisions, and DAG versions
 - [ ] `notify` sent for every Human-in-the-Loop pause, for each failure, and for final completion (see Notifications below)
 
 ---

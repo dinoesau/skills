@@ -68,12 +68,12 @@ Before declaring the plan done, confirm:
 - [ ] The plan is self-contained: an agent with no access to this conversation can execute it
 - [ ] Dependency graph is present with leaf-first tree and file-conflict matrix
 - [ ] Each wave declares sub-agent assignment and barrier guardrail, even sequential single-lane waves; no two parallel steps touch the same file; coordinator implements zero steps itself
-- [ ] Coordinator loop is present with barrier merge, DAG mutation log, and autonomous replan rules
+- [ ] Coordinator loop is present with barrier merge, counter BEFORE/AFTER, resolution subagent decisions, DAG mutation log, and autonomous replan rules
 - [ ] Fault Localization Report section is present with strict template, P1-P5 layers, and plan-critique-loop suggestion rule (P2/P3 only)
-- [ ] State file is initialized at `docs/plan-<slug>-state.md` with per-wave sections, live `Actual vs base` header slot, and DAG v1
-- [ ] Each lane declares its retry loop (act -> eval -> reflect -> fix, max 2 fix attempts) with validator output logged to the state file
+- [ ] State file is initialized at `docs/plan-<slug>-state.md` with per-wave sections, live `Actual vs base` header slot, counter verdict slots, resolution decision slots, and DAG v1
+- [ ] Each lane declares its retry loop (act -> eval -> reflect -> fix, max 2 fix attempts) with validator output logged to the state file plus BEFORE/AFTER proposals for the resolver
 - [ ] Each lane declares skill IDs to load via the skill tool with loading evidence (REFERENCE.md, EVALS.md); editing lanes add the kickoff gate (readiness reply + explicit GO before any edit)
-- [ ] Final gate declares Tier 2a correctness, Tier 2b language standard per touched language, and Tier 2c 12-factor (or logged skip with reason); all blocking with fix-wave iteration capped at 4 cycles
+- [ ] Final gate declares Tier 2a correctness, Tier 2b language standard per touched language, and Tier 2c 12-factor (or logged skip with reason); all blocking with counter BEFORE/AFTER, resolution decisions, and fix-wave iteration capped at 4 cycles
 
 ## Notifications
 

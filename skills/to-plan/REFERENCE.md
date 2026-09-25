@@ -114,11 +114,14 @@ Grounded in "AI Engineering" (O'Reilly); the concepts themselves are assumed kno
 ## Adversarial review
 
 - Two tiers, both blocking. Tier 1 runs after each wave barrier on the wave diff. Tier 2 is the final pre-merge gate with three parallel lanes: 2a correctness, 2b language standard, 2c 12-factor. Any `fail` blocks the next wave or the merge until the coordinator replans with fix waves.
-- The coordinator spawns one `counter` subagent per review with the wave or branch `git diff` plus the Problem Statement and Solution copied from Docs for Humans.
+- The coordinator spawns one `counter` subagent per review with the wave or branch `git diff` plus the Problem Statement and Solution copied from Docs for Humans. Counters propose, never apply.
+- Every `fail` finding must carry BEFORE plus AFTER: BEFORE quotes the exact diff lines under review, AFTER is the literal replacement paste-ready with file path and line numbers. A `fail` without both is invalid, re-spawn the review.
+- Implementation lanes also propose in BEFORE/AFTER when they suggest an alternative or a fix during retry: BEFORE is the current code, AFTER is the proposed change. Lanes never self-approve their own AFTER.
+- The orchestrator is the brain. After counters and lanes propose, it spawns one resolution subagent per barrier or final gate. The resolver outputs ACCEPT, REJECT with reason, or MODIFIED with a superseding AFTER per finding. Only accepted AFTERs become fix waves. Rejects are logged in the state file, never applied silently.
 - Tier 2b spawns one `counter` lane per touched language loading the skill via the skill tool: Python loads good-python, TypeScript loads good-typescript, Rust loads rusty, then reads REFERENCE.md and EVALS.md from the skill base directory. Findings on diff-touched lines block; pre-existing outside the diff is advisory.
 - Tier 2c applies the 12-factor checklist in TEMPLATE.md. Required for deploy, runtime, config, or backing-service changes; skipped with a logged reason for pure library changes.
 - Tier 2 fix loop is capped at 4 cycles. After the fourth failed re-review the coordinator stops and asks instead of spawning more waves.
-- Verdict format is `pass / fail + findings`, stored in the state file. Findings must cite file paths and line numbers.
+- Verdict format is `pass / fail + findings with BEFORE/AFTER`, stored in the state file. Findings must cite file paths and line numbers.
 - Keep the review narrow: refute the diff against the stated problem and solution. Do not redesign scope; file scope questions as findings for the coordinator.
 
 ## Instructions vs context
