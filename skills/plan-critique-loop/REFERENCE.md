@@ -43,19 +43,34 @@ Load `improve-codebase-architecture` via the `skill` tool before reviewing.
 - New seams go as high as possible. Unit-only coverage for an integration change is BLOCKING.
 - Respect ADRs in the touched area. Conflicts are BLOCKING with file and ADR cited.
 
-## Output format and merge rules
+## Output format and resolution rules
 
-Each counter returns one line per finding:
+Each counter proposes, never applies. The orchestrator decides via the resolution subagent. Each counter returns one finding block per issue:
 
 ```
 BLOCKING C2 src/billing/invoice.py: hardcoded API key, move to env
+BEFORE:
+stripe_key = "sk-live-123"
+AFTER:
+stripe_key = os.environ["STRIPE_KEY"]
 NIT C1 src/auth/login.py: long method, consider extract
 APPROVE: no blocking findings
 ```
 
-Merge rules for the orchestrator:
+Rules for counters:
 
+- BLOCKING without BEFORE plus AFTER is invalid.
+- BEFORE quotes the exact plan text or code under review.
+- AFTER is the literal replacement, paste-ready.
+- NITs and APPROVE carry no BEFORE/AFTER.
+
+Resolution subagent (one per wave, spawned by the orchestrator):
+
+- Input: C1..Cn list, plan text, all BLOCKINGs with BEFORE/AFTER.
+- Output per BLOCKING: `ACCEPT <Cn>: apply AFTER as-is`, `REJECT <Cn>: <1-line reason>`, or `MODIFIED <Cn>` plus a superseding AFTER block.
+- Merge rules for the resolver:
 - Deduplicate identical `Cn` plus reason pairs across lanes.
 - Blocking beats nit on the same `Cn`.
 - Conflicting lane advice is kept as two open items, never silently dropped.
-- A wave passes only when all 3 lanes return `APPROVE` lines.
+- A wave passes only when all 3 lanes return `APPROVE` lines or all BLOCKINGs are REJECTed with reason logged.
+- Only ACCEPT and MODIFIED AFTERs reach the plan rewrite. REJECTs are logged, never applied.
